@@ -3,28 +3,63 @@ setlocal enabledelayedexpansion
 chcp 65001 >nul
 cls
 
-REM ============================================================
-REM Rafeeq Call Helper - Windows Startup Script
-REM - Starts MongoDB (service if installed)
-REM - Creates default .env files if missing
-REM - Seeds DB once (creates backend\.seeded marker)
-REM - Starts backend + frontend in separate windows
-REM ============================================================
-
 echo.
 echo =============================================
-echo   رفيق - مساعد المكالمات الذكي
 echo   Rafeeq Call Helper - Windows Start
 echo =============================================
 echo.
 
-REM --- Ensure backend .env exists (copy from example if missing)
+REM --- Check Node.js is installed ---
+where node >nul 2>&1
+if %errorlevel% neq 0 (
+  echo [ERROR] Node.js is NOT installed.
+  echo.
+  echo Please install Node.js first:
+  echo   https://nodejs.org/
+  echo.
+  echo Download the LTS version, run the installer,
+  echo then RESTART your computer and run this script again.
+  echo.
+  pause
+  exit /b 1
+)
+for /f "tokens=*" %%V in ('node -v') do echo [OK] Node.js %%V found
+
+REM --- Check MongoDB is installed ---
+where mongod >nul 2>&1
+if %errorlevel% neq 0 (
+  sc query "MongoDB" >nul 2>&1
+  if !errorlevel! neq 0 (
+    echo [ERROR] MongoDB is NOT installed.
+    echo.
+    echo Please install MongoDB Community Server:
+    echo   https://www.mongodb.com/try/download/community
+    echo.
+    echo During installation:
+    echo   - Choose "Complete" setup
+    echo   - CHECK "Install MongoDB as a Service"
+    echo   - CHECK "Install MongoDB Compass" if you want a GUI
+    echo.
+    echo Then RESTART your computer and run this script again.
+    echo.
+    pause
+    exit /b 1
+  )
+)
+echo [OK] MongoDB found
+
+REM --- Try to start MongoDB Windows service ---
+call :startMongoService "MongoDB"
+call :startMongoService "MongoDB Server"
+call :startMongoService "MongoDBServer"
+
+REM --- Ensure backend .env exists ---
 if not exist "backend\.env" (
   if exist "backend\.env.example" (
-    echo [INFO] backend\.env not found. Creating from backend\.env.example
+    echo [INFO] Creating backend\.env from example
     copy /Y "backend\.env.example" "backend\.env" >nul
   ) else (
-    echo [WARN] backend\.env.example not found. Creating minimal backend\.env
+    echo [INFO] Creating default backend\.env
     > "backend\.env" echo PORT=5000
     >>"backend\.env" echo NODE_ENV=development
     >>"backend\.env" echo FRONTEND_URL=http://localhost:3000
@@ -34,20 +69,15 @@ if not exist "backend\.env" (
   )
 )
 
-REM --- Ensure frontend .env exists (optional)
+REM --- Ensure frontend .env exists ---
 if not exist ".env" (
-  echo [INFO] .env not found. Creating .env with VITE_ENABLE_AI=false
+  echo [INFO] Creating .env with VITE_ENABLE_AI=false
   > ".env" echo VITE_ENABLE_AI=false
 )
 
-REM --- Try to start MongoDB Windows service (common service names)
-call :startMongoService "MongoDB"
-call :startMongoService "MongoDB Server"
-call :startMongoService "MongoDBServer"
-
-REM --- Install dependencies (if node_modules missing)
+REM --- Install dependencies ---
 if not exist "node_modules" (
-  echo [INFO] Installing frontend dependencies
+  echo [INFO] Installing frontend dependencies - please wait
   call npm install
   if errorlevel 1 (
     echo [ERROR] Failed to install frontend dependencies
@@ -57,7 +87,7 @@ if not exist "node_modules" (
 )
 
 if not exist "backend\node_modules" (
-  echo [INFO] Installing backend dependencies
+  echo [INFO] Installing backend dependencies - please wait
   pushd backend
   call npm install
   popd
@@ -68,40 +98,39 @@ if not exist "backend\node_modules" (
   )
 )
 
-REM --- Seed database once (WARNING: seed wipes Users/KnowledgeBase)
+REM --- Seed database once ---
 if not exist "backend\.seeded" (
   echo [INFO] Seeding database - first run only
   pushd backend
   call npm run seed
   popd
   if errorlevel 1 (
-    echo [ERROR] Seeding failed. Check MongoDB is running and backend\.env MONGODB_URI is correct.
+    echo [ERROR] Seeding failed. Make sure MongoDB is running.
     pause
     exit /b 1
   )
   echo seeded>"backend\.seeded"
 )
 
-REM --- Start backend + frontend in separate terminals
+REM --- Start backend + frontend in separate terminals ---
 start "Rafeeq Backend" cmd /k "cd /d %cd%\backend && npm run dev"
 start "Rafeeq Frontend" cmd /k "cd /d %cd% && npm run dev"
 
 echo.
-echo [DONE] Started backend and frontend.
-echo - Frontend: http://localhost:3000
-echo - Backend:  http://localhost:5000
-
+echo =============================================
+echo   [DONE] Started backend and frontend
+echo =============================================
 echo.
-echo Login:
-echo - admin / admin123
-echo - user  / user123
-
+echo   Frontend: http://localhost:3000
+echo   Backend:  http://localhost:5000
 echo.
-echo Notes:
-echo - If MongoDB service didn^&t start, start it manually or verify the service name.
-echo - backend\utils\seed.js wipes Users and KnowledgeBase when run.
+echo   Login:
+echo     admin / admin123
+echo     user  / user123
 echo.
-
+echo =============================================
+echo.
+pause
 exit /b 0
 
 :startMongoService
@@ -113,16 +142,16 @@ if %errorlevel% neq 0 (
 
 for /f "tokens=3 delims=: " %%A in ('sc query "%SVC%" ^| findstr /i "STATE"') do set "STATE=%%A"
 if /i "%STATE%"=="RUNNING" (
-  echo [INFO] MongoDB service "%SVC%" already running.
+  echo [OK] MongoDB service "%SVC%" already running
   goto :eof
 )
 
-echo [INFO] Starting MongoDB service "%SVC%"...
+echo [INFO] Starting MongoDB service "%SVC%"
 net start "%SVC%" >nul 2>&1
 if %errorlevel% neq 0 (
-  echo [WARN] Failed to start service "%SVC%". Try running this script as Administrator.
+  echo [WARN] Could not start "%SVC%". Try running as Administrator.
 ) else (
-  echo [OK] MongoDB service "%SVC%" started.
+  echo [OK] MongoDB service "%SVC%" started
 )
 
 goto :eof

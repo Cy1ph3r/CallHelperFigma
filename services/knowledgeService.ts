@@ -82,13 +82,24 @@ function findBestMatchInCases(
   userDescription: string,
   cases: any[]
 ): KnowledgeSearchResult {
-  const normalizedUserDesc = userDescription
-    .toLowerCase()
-    .trim()
-    .replace(/[.,!?;:()[\]{}]/g, ' ')
-    .replace(/\s+/g, ' ');
+  const normalizeForMatching = (text: string): string => {
+    if (!text) return '';
+    return text
+      .toLowerCase()
+      .trim()
+      .replace(/[.,!?;:()[\]{}]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .split(' ')
+      .filter(Boolean)
+      .map((token) => token.replace(/^ال(?=.)/, ''))
+      .join(' ');
+  };
 
-  const userWords = normalizedUserDesc.split(' ');
+  const normalizedUserDesc = normalizeForMatching(userDescription);
+  const userWords = normalizedUserDesc.split(' ').filter(Boolean);
+  const userWordSet = new Set(userWords);
+  const uniqueUserWords = Array.from(userWordSet);
+  const normalizedUserDescPadded = ` ${normalizedUserDesc} `;
 
   let bestMatch = {
     problem: null as any,
@@ -107,16 +118,26 @@ function findBestMatchInCases(
     const allKeywords = [...mainKeywords, ...extraKeywords, ...synonyms];
     
     // Build searchable text
-    const searchableText = [
-      caseItem.category || '',
-      caseItem.subCategory || '',
-      ...allKeywords,
-    ].join(' ').toLowerCase();
+    const searchableText = normalizeForMatching(allKeywords.join(' '));
+    const searchableTextPadded = ` ${searchableText} `;
+
+    const hasExactKeywordMatch = (keyword: string): boolean => {
+      const normalizedKeyword = normalizeForMatching(keyword);
+      if (!normalizedKeyword) return false;
+
+      // Phrase keyword: exact phrase match
+      if (normalizedKeyword.includes(' ')) {
+        return normalizedUserDescPadded.includes(` ${normalizedKeyword} `);
+      }
+
+      // Single-token keyword: exact token match
+      return userWordSet.has(normalizedKeyword);
+    };
 
     // Check for negative keywords first (if any match, skip this case)
     let hasNegativeMatch = false;
     negativeKeywords.forEach((negKeyword: string) => {
-      if (negKeyword && normalizedUserDesc.includes(negKeyword.toLowerCase())) {
+      if (negKeyword && hasExactKeywordMatch(negKeyword)) {
         hasNegativeMatch = true;
       }
     });
@@ -128,52 +149,38 @@ function findBestMatchInCases(
     // Check main keywords (highest weight)
     mainKeywords.forEach((keyword: string) => {
       if (!keyword) return;
-      const normalizedKeyword = keyword.toLowerCase();
-
-      if (userWords.includes(normalizedKeyword)) {
+      if (hasExactKeywordMatch(keyword)) {
         matchedCount += 3; // Main keywords have highest weight
-      }
-      else if (normalizedUserDesc.includes(normalizedKeyword)) {
-        matchedCount += 2;
       }
     });
 
     // Check extra keywords (medium weight)
     extraKeywords.forEach((keyword: string) => {
       if (!keyword) return;
-      const normalizedKeyword = keyword.toLowerCase();
-
-      if (userWords.includes(normalizedKeyword)) {
+      if (hasExactKeywordMatch(keyword)) {
         matchedCount += 2;
-      }
-      else if (normalizedUserDesc.includes(normalizedKeyword)) {
-        matchedCount += 1;
       }
     });
 
     // Check synonyms (lower weight)
     synonyms.forEach((synonym: string) => {
       if (!synonym) return;
-      const normalizedSynonym = synonym.toLowerCase();
-
-      if (userWords.includes(normalizedSynonym)) {
+      if (hasExactKeywordMatch(synonym)) {
         matchedCount += 1.5;
-      }
-      else if (normalizedUserDesc.includes(normalizedSynonym)) {
-        matchedCount += 0.75;
       }
     });
 
     // Also check if user description words appear in searchable text
-    userWords.forEach((word) => {
-      if (word.length > 2 && searchableText.includes(word)) {
+    uniqueUserWords.forEach((word) => {
+      if (word.length > 2 && searchableTextPadded.includes(` ${word} `)) {
         matchedCount += 0.5;
       }
     });
 
     // Calculate percentage
     const totalPossibleMatches = Math.max((mainKeywords.length * 3) + (extraKeywords.length * 2) + (synonyms.length * 1.5), userWords.length);
-    const matchPercentage = Math.round((matchedCount / totalPossibleMatches) * 100);
+    const rawPercentage = totalPossibleMatches > 0 ? (matchedCount / totalPossibleMatches) * 100 : 0;
+    const matchPercentage = Math.min(100, Math.round(rawPercentage));
 
     // Update best match if this is better
     if (matchPercentage > bestMatch.matchPercentage) {

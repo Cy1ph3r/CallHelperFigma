@@ -23,6 +23,18 @@ interface Case {
   updatedAt: string;
 }
 
+const USER_TYPE_OPTIONS = ['عمرة', 'حج'] as const;
+
+const ACCOUNT_STATUS_OPTIONS: Record<string, string[]> = {
+  عمرة: ['وكيل خارجي', 'شركة عمرة'],
+  حج: ['مقدم خدمة سكن', 'مكتب شؤون', 'منظم تابع']
+};
+
+const USER_TYPE_CASE_PREFIX: Record<string, string> = {
+  عمرة: 'UM',
+  حج: 'HJ'
+};
+
 export function DatabasePage() {
   const [cases, setCases] = useState<Case[]>([]);
   const [loading, setLoading] = useState(true);
@@ -44,6 +56,26 @@ export function DatabasePage() {
     notes: ''
   });
   const [errors, setErrors] = useState<{[key: string]: string}>({});
+
+  const getNextCaseId = (userType: string) => {
+    const prefix = USER_TYPE_CASE_PREFIX[userType];
+    if (!prefix) return '';
+
+    const pattern = new RegExp(`^CH-${prefix}-(\\d+)$`, 'i');
+    let maxNumber = 0;
+
+    cases.forEach((caseItem) => {
+      const match = caseItem.caseId?.trim().match(pattern);
+      if (!match) return;
+
+      const numericPart = parseInt(match[1], 10);
+      if (!Number.isNaN(numericPart)) {
+        maxNumber = Math.max(maxNumber, numericPart);
+      }
+    });
+
+    return `CH-${prefix}-${String(maxNumber + 1).padStart(3, '0')}`;
+  };
 
   // Fetch cases from database
   const fetchCases = async () => {
@@ -74,6 +106,44 @@ export function DatabasePage() {
   useEffect(() => {
     fetchCases();
   }, []);
+
+  useEffect(() => {
+    if (!showAddForm || !!editingCase) {
+      return;
+    }
+
+    if (!formData.userType) {
+      setFormData((prev) => {
+        if (!prev.caseId && !prev.accountStatus) return prev;
+        return {
+          ...prev,
+          caseId: '',
+          accountStatus: ''
+        };
+      });
+      return;
+    }
+
+    const generatedCaseId = getNextCaseId(formData.userType);
+    const allowedAccountStatuses = ACCOUNT_STATUS_OPTIONS[formData.userType] || [];
+
+    setFormData((prev) => {
+      const nextCaseId = generatedCaseId || prev.caseId;
+      const nextAccountStatus = allowedAccountStatuses.includes(prev.accountStatus)
+        ? prev.accountStatus
+        : '';
+
+      if (prev.caseId === nextCaseId && prev.accountStatus === nextAccountStatus) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        caseId: nextCaseId,
+        accountStatus: nextAccountStatus
+      };
+    });
+  }, [showAddForm, editingCase, formData.userType, cases]);
 
   // Reset form
   const resetForm = () => {
@@ -109,6 +179,10 @@ export function DatabasePage() {
 
     if (!formData.userType.trim()) {
       newErrors.userType = 'UserType is required';
+    }
+
+    if (!formData.accountStatus.trim()) {
+      newErrors.accountStatus = 'AccountStatus is required';
     }
 
     if (!formData.category.trim()) {
@@ -257,6 +331,9 @@ export function DatabasePage() {
   }
 
   if (showAddForm) {
+    const accountStatusOptions = ACCOUNT_STATUS_OPTIONS[formData.userType] || [];
+    const hasLegacyUserTypeValue = !!formData.userType && !USER_TYPE_OPTIONS.includes(formData.userType as typeof USER_TYPE_OPTIONS[number]);
+    const hasLegacyAccountStatusValue = !!formData.accountStatus && !accountStatusOptions.includes(formData.accountStatus);
     return (
       <div className="max-w-3xl">
         <div className="flex items-center justify-between mb-8">
@@ -273,6 +350,67 @@ export function DatabasePage() {
         </div>
         
         <div className="space-y-6">
+          {/* UserType */}
+          <div>
+            <label className="block text-sm font-medium text-foreground mb-2">
+              UserType <span className="text-red-500">*</span>
+            </label>
+            <select
+              value={formData.userType}
+              onChange={(e) => setFormData({ ...formData, userType: e.target.value })}
+              className={`w-full px-4 py-2.5 border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 ${
+                errors.userType ? 'border-red-500' : 'border-border'
+              }`}
+            >
+              <option value="">اختر نوع المستخدم</option>
+              {USER_TYPE_OPTIONS.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+              {hasLegacyUserTypeValue && (
+                <option value={formData.userType}>{formData.userType}</option>
+              )}
+            </select>
+            {errors.userType && (
+              <p className="text-xs text-red-500 mt-1">{errors.userType}</p>
+            )}
+            <p className="text-xs text-muted-foreground mt-1">نوع الخدمة الأساسية (عمرة أو حج)</p>
+          </div>
+
+          {/* AccountStatus */}
+          <div>
+            <label className="block text-sm font-medium text-foreground mb-2">
+              AccountStatus <span className="text-red-500">*</span>
+            </label>
+            <select
+              value={formData.accountStatus}
+              onChange={(e) => setFormData({ ...formData, accountStatus: e.target.value })}
+              className={`w-full px-4 py-2.5 border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 ${
+                errors.accountStatus ? 'border-red-500' : 'border-border'
+              }`}
+              disabled={!formData.userType}
+            >
+              <option value="">
+                {formData.userType ? 'اختر الفئة الفرعية' : 'اختر UserType أولاً'}
+              </option>
+              {accountStatusOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+              {hasLegacyAccountStatusValue && (
+                <option value={formData.accountStatus}>{formData.accountStatus}</option>
+              )}
+            </select>
+            {errors.accountStatus && (
+              <p className="text-xs text-red-500 mt-1">{errors.accountStatus}</p>
+            )}
+            <p className="text-xs text-muted-foreground mt-1">
+              {formData.userType === 'عمرة'
+                ? 'خيارات عمرة: وكيل خارجي أو شركة عمرة'
+                : formData.userType === 'حج'
+                  ? 'خيارات حج: مقدم خدمة سكن أو مكتب شؤون أو منظم تابع'
+                  : 'الفئة التفصيلية تعتمد على UserType'}
+            </p>
+          </div>
+
           {/* CaseID */}
           <div>
             <label className="block text-sm font-medium text-foreground mb-2">
@@ -280,52 +418,21 @@ export function DatabasePage() {
             </label>
             <input
               type="text"
-              placeholder="e.g., CH-UM-004"
+              placeholder={formData.userType === 'حج' ? 'CH-HJ-001' : 'CH-UM-001'}
               value={formData.caseId}
               onChange={(e) => setFormData({ ...formData, caseId: e.target.value })}
               className={`w-full px-4 py-2.5 border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 ${
                 errors.caseId ? 'border-red-500' : 'border-border'
               }`}
               disabled={!!editingCase}
+              readOnly={!editingCase}
             />
             {errors.caseId && (
               <p className="text-xs text-red-500 mt-1">{errors.caseId}</p>
             )}
-            <p className="text-xs text-muted-foreground mt-1">Unique identifier for this case</p>
-          </div>
-
-          {/* UserType */}
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-2">
-              UserType <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="text"
-              placeholder="e.g., شركة صغيرة"
-              value={formData.userType}
-              onChange={(e) => setFormData({ ...formData, userType: e.target.value })}
-              className={`w-full px-4 py-2.5 border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 ${
-                errors.userType ? 'border-red-500' : 'border-border'
-              }`}
-            />
-            {errors.userType && (
-              <p className="text-xs text-red-500 mt-1">{errors.userType}</p>
-            )}
-            <p className="text-xs text-muted-foreground mt-1">Type of user this case applies to</p>
-          </div>
-
-          {/* AccountStatus */}
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-2">
-              AccountStatus
-            </label>
-            <input
-              type="text"
-              placeholder="e.g., نشط"
-              value={formData.accountStatus}
-              onChange={(e) => setFormData({ ...formData, accountStatus: e.target.value })}
-              className="w-full px-4 py-2.5 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
-            />
+            <p className="text-xs text-muted-foreground mt-1">
+              Auto-generated unique ID based on UserType (CH-UM-### or CH-HJ-###)
+            </p>
           </div>
 
           {/* Category */}

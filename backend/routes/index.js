@@ -33,6 +33,64 @@ router.get('/users', authenticate, authorize('admin'), async (req, res) => {
   }
 });
 
+router.patch('/cases/:id/active', authenticate, authorize('admin', 'moderator'), async (req, res) => {
+  try {
+    const { isActive } = req.body;
+
+    if (typeof isActive !== 'boolean') {
+      return res.status(400).json({ success: false, message: 'isActive must be a boolean' });
+    }
+
+    const updatedCase = await Case.findByIdAndUpdate(
+      req.params.id,
+      {
+        isActive,
+        updatedBy: req.user._id,
+      },
+      { new: true, runValidators: true }
+    );
+
+    if (!updatedCase) {
+      return res.status(404).json({ success: false, message: 'Case not found' });
+    }
+
+    res.json({
+      success: true,
+      data: updatedCase,
+      message: `Case ${isActive ? 'activated' : 'deactivated'} successfully`,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.patch('/cases/:id/archive', authenticate, authorize('admin', 'moderator'), async (req, res) => {
+  try {
+    const archivedCase = await Case.findByIdAndUpdate(
+      req.params.id,
+      {
+        isArchived: true,
+        archivedAt: new Date(),
+        archivedBy: req.user._id,
+        updatedBy: req.user._id,
+      },
+      { new: true, runValidators: true }
+    );
+
+    if (!archivedCase) {
+      return res.status(404).json({ success: false, message: 'Case not found' });
+    }
+
+    res.json({
+      success: true,
+      data: archivedCase,
+      message: 'Case archived successfully',
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 router.get('/users/me', authenticate, async (req, res) => {
   res.json({ success: true, data: req.user });
 });
@@ -339,9 +397,17 @@ router.post('/analyze-confidence', authenticate, async (req, res) => {
 // Search endpoint - available to all authenticated users
 router.get('/cases', authenticate, async (req, res) => {
   try {
-    const cases = await Case.find()
+    const { archived = 'false', includeInactive = 'false' } = req.query;
+    const query = { isArchived: archived === 'true' };
+
+    if (includeInactive !== 'true') {
+      query.isActive = true;
+    }
+
+    const cases = await Case.find(query)
       .populate('createdBy', 'name username')
       .populate('updatedBy', 'name username')
+      .populate('archivedBy', 'name username')
       .sort({ updatedAt: -1 });
     
     res.json({ success: true, data: cases });

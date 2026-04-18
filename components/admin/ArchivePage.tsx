@@ -1,8 +1,10 @@
+import { useEffect, useState } from 'react';
 import { Archive, Download, Trash2, Search, FileText, Clock, HardDrive } from 'lucide-react';
 import { Card } from '../ui/card';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Badge } from '../ui/badge';
+import { toast } from 'sonner';
 import {
   Select,
   SelectContent,
@@ -28,7 +30,59 @@ interface ArchiveItem {
   retention: string;
 }
 
+interface ArchivedCase {
+  _id: string;
+  caseId: string;
+  userType: string;
+  accountStatus: string;
+  category: string;
+  subCategory: string;
+  archivedAt?: string | null;
+}
+
 export function ArchivePage() {
+  const [archivedCases, setArchivedCases] = useState<ArchivedCase[]>([]);
+  const [loadingArchivedCases, setLoadingArchivedCases] = useState(true);
+
+  const fetchArchivedCases = async () => {
+    try {
+      setLoadingArchivedCases(true);
+      const token = localStorage.getItem('token');
+
+      const response = await fetch('http://localhost:5000/api/cases?archived=true&includeInactive=true', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch archived cases');
+      }
+
+      const data = await response.json();
+      setArchivedCases(data.data || []);
+    } catch (error) {
+      console.error('Error fetching archived cases:', error);
+      toast.error('فشل في تحميل الحالات المؤرشفة');
+    } finally {
+      setLoadingArchivedCases(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchArchivedCases();
+  }, []);
+
+  const formatDate = (dateString?: string | null) => {
+    if (!dateString) return '—';
+    return new Date(dateString).toLocaleString('en-GB', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    }).replace(',', '');
+  };
   const mockArchiveItems: ArchiveItem[] = [
     { 
       id: '1', 
@@ -95,6 +149,56 @@ export function ArchivePage() {
           إنشاء نسخة احتياطية
         </Button>
       </div>
+
+      {/* Archived Cases */}
+      <Card className="glass-panel border-2 border-border p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-bold text-foreground">الحالات المؤرشفة</h3>
+          <Badge className="bg-primary/10 text-primary border-0">
+            {archivedCases.length} حالة
+          </Badge>
+        </div>
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow className="border-b border-border hover:bg-transparent">
+                <TableHead className="text-right text-foreground">CaseID</TableHead>
+                <TableHead className="text-right text-foreground">Service Type</TableHead>
+                <TableHead className="text-right text-foreground">UserType</TableHead>
+                <TableHead className="text-right text-foreground">Category</TableHead>
+                <TableHead className="text-right text-foreground">SubCategory</TableHead>
+                <TableHead className="text-right text-foreground">تاريخ الأرشفة</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loadingArchivedCases ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-center py-6 text-muted-foreground">
+                    جاري تحميل الحالات المؤرشفة...
+                  </TableCell>
+                </TableRow>
+              ) : archivedCases.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-center py-6 text-muted-foreground">
+                    لا توجد حالات مؤرشفة حالياً
+                  </TableCell>
+                </TableRow>
+              ) : (
+                archivedCases.map((item) => (
+                  <TableRow key={item._id} className="border-b border-border hover:bg-accent/50">
+                    <TableCell className="font-medium text-foreground">{item.caseId}</TableCell>
+                    <TableCell className="text-foreground">{item.userType}</TableCell>
+                    <TableCell className="text-foreground">{item.accountStatus}</TableCell>
+                    <TableCell className="text-foreground">{item.category}</TableCell>
+                    <TableCell className="text-foreground">{item.subCategory}</TableCell>
+                    <TableCell className="text-muted-foreground">{formatDate(item.archivedAt)}</TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
+      </Card>
 
       {/* Storage Statistics */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

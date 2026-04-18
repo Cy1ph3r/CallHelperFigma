@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Plus, Save, X, RefreshCw } from 'lucide-react';
+import { Plus, Save, X, RefreshCw, Archive } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Card } from '../ui/card';
+import { Switch } from '../ui/switch';
 import { toast } from 'sonner';
 
 interface Case {
@@ -21,6 +22,9 @@ interface Case {
   notes: string;
   priority: string;
   updatedAt: string;
+  isActive?: boolean;
+  isArchived?: boolean;
+  archivedAt?: string | null;
 }
 
 const USER_TYPE_OPTIONS = ['عمرة', 'حج'] as const;
@@ -33,6 +37,14 @@ const ACCOUNT_STATUS_OPTIONS: Record<string, string[]> = {
 const USER_TYPE_CASE_PREFIX: Record<string, string> = {
   عمرة: 'UM',
   حج: 'HJ'
+};
+
+const SUBTYPE_CASE_CODE: Record<string, string> = {
+  'وكيل خارجي': 'EA',
+  'شركة عمرة': 'UC',
+  'مقدم خدمة سكن': 'HP',
+  'مكتب شؤون': 'AO',
+  'منظم تابع': 'SO'
 };
 
 export function DatabasePage() {
@@ -57,11 +69,13 @@ export function DatabasePage() {
   });
   const [errors, setErrors] = useState<{[key: string]: string}>({});
 
-  const getNextCaseId = (userType: string) => {
-    const prefix = USER_TYPE_CASE_PREFIX[userType];
-    if (!prefix) return '';
+  const getNextCaseId = (serviceType: string, userSubtype: string) => {
+    const servicePrefix = USER_TYPE_CASE_PREFIX[serviceType];
+    const subtypeCode = SUBTYPE_CASE_CODE[userSubtype];
+    if (!servicePrefix || !subtypeCode) return '';
 
-    const pattern = new RegExp(`^CH-${prefix}-(\\d+)$`, 'i');
+    const fullPrefix = `CH-${servicePrefix}-${subtypeCode}`;
+    const pattern = new RegExp(`^${fullPrefix}-(\\d+)$`, 'i');
     let maxNumber = 0;
 
     cases.forEach((caseItem) => {
@@ -74,7 +88,66 @@ export function DatabasePage() {
       }
     });
 
-    return `CH-${prefix}-${String(maxNumber + 1).padStart(3, '0')}`;
+    return `${fullPrefix}-${String(maxNumber + 1).padStart(3, '0')}`;
+  };
+
+  // Toggle active/inactive
+  const handleActiveToggle = async (id: string, nextIsActive: boolean) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`http://localhost:5000/api/cases/${id}/active`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ isActive: nextIsActive }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.message || 'Failed to update case status');
+      }
+
+      setCases((prev) =>
+        prev.map((item) =>
+          item._id === id ? { ...item, isActive: nextIsActive } : item
+        )
+      );
+
+      toast.success(nextIsActive ? 'تم تفعيل الحالة' : 'تم تعطيل الحالة');
+    } catch (error: any) {
+      console.error('Error updating case active status:', error);
+      toast.error(error.message || 'فشل في تحديث حالة التفعيل');
+    }
+  };
+
+  // Archive case
+  const handleArchiveCase = async (id: string) => {
+    if (!window.confirm('Are you sure you want to archive this case?')) {
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`http://localhost:5000/api/cases/${id}/archive`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.message || 'Failed to archive case');
+      }
+
+      toast.success('تمت أرشفة الحالة بنجاح');
+      fetchCases();
+    } catch (error: any) {
+      console.error('Error archiving case:', error);
+      toast.error(error.message || 'فشل في أرشفة الحالة');
+    }
   };
 
   // Fetch cases from database
@@ -83,7 +156,7 @@ export function DatabasePage() {
       setLoading(true);
       const token = localStorage.getItem('token');
       
-      const response = await fetch('http://localhost:5000/api/cases', {
+      const response = await fetch('http://localhost:5000/api/cases?archived=false&includeInactive=true', {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -124,11 +197,14 @@ export function DatabasePage() {
       return;
     }
 
-    const generatedCaseId = getNextCaseId(formData.userType);
     const allowedAccountStatuses = ACCOUNT_STATUS_OPTIONS[formData.userType] || [];
+    const hasValidSubtype = allowedAccountStatuses.includes(formData.accountStatus);
+    const generatedCaseId = hasValidSubtype
+      ? getNextCaseId(formData.userType, formData.accountStatus)
+      : '';
 
     setFormData((prev) => {
-      const nextCaseId = generatedCaseId || prev.caseId;
+      const nextCaseId = generatedCaseId;
       const nextAccountStatus = allowedAccountStatuses.includes(prev.accountStatus)
         ? prev.accountStatus
         : '';
@@ -143,7 +219,7 @@ export function DatabasePage() {
         accountStatus: nextAccountStatus
       };
     });
-  }, [showAddForm, editingCase, formData.userType, cases]);
+  }, [showAddForm, editingCase, formData.userType, formData.accountStatus, cases]);
 
   // Reset form
   const resetForm = () => {
@@ -178,11 +254,11 @@ export function DatabasePage() {
     }
 
     if (!formData.userType.trim()) {
-      newErrors.userType = 'UserType is required';
+      newErrors.userType = 'Service Type is required';
     }
 
     if (!formData.accountStatus.trim()) {
-      newErrors.accountStatus = 'AccountStatus is required';
+      newErrors.accountStatus = 'UserType is required';
     }
 
     if (!formData.category.trim()) {
@@ -353,7 +429,7 @@ export function DatabasePage() {
           {/* UserType */}
           <div>
             <label className="block text-sm font-medium text-foreground mb-2">
-              UserType <span className="text-red-500">*</span>
+              Service Type <span className="text-red-500">*</span>
             </label>
             <select
               value={formData.userType}
@@ -379,7 +455,7 @@ export function DatabasePage() {
           {/* AccountStatus */}
           <div>
             <label className="block text-sm font-medium text-foreground mb-2">
-              AccountStatus <span className="text-red-500">*</span>
+              UserType <span className="text-red-500">*</span>
             </label>
             <select
               value={formData.accountStatus}
@@ -390,7 +466,7 @@ export function DatabasePage() {
               disabled={!formData.userType}
             >
               <option value="">
-                {formData.userType ? 'اختر الفئة الفرعية' : 'اختر UserType أولاً'}
+                {formData.userType ? 'اختر نوع المستخدم' : 'اختر Service Type أولاً'}
               </option>
               {accountStatusOptions.map((option) => (
                 <option key={option} value={option}>{option}</option>
@@ -407,7 +483,7 @@ export function DatabasePage() {
                 ? 'خيارات عمرة: وكيل خارجي أو شركة عمرة'
                 : formData.userType === 'حج'
                   ? 'خيارات حج: مقدم خدمة سكن أو مكتب شؤون أو منظم تابع'
-                  : 'الفئة التفصيلية تعتمد على UserType'}
+                  : 'الفئة التفصيلية تعتمد على Service Type'}
             </p>
           </div>
 
@@ -418,7 +494,13 @@ export function DatabasePage() {
             </label>
             <input
               type="text"
-              placeholder={formData.userType === 'حج' ? 'CH-HJ-001' : 'CH-UM-001'}
+              placeholder={
+                formData.accountStatus
+                  ? `CH-${USER_TYPE_CASE_PREFIX[formData.userType] || 'UM'}-${SUBTYPE_CASE_CODE[formData.accountStatus] || 'EA'}-001`
+                  : formData.userType === 'حج'
+                    ? 'CH-HJ-HP-001'
+                    : 'CH-UM-EA-001'
+              }
               value={formData.caseId}
               onChange={(e) => setFormData({ ...formData, caseId: e.target.value })}
               className={`w-full px-4 py-2.5 border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 ${
@@ -431,7 +513,7 @@ export function DatabasePage() {
               <p className="text-xs text-red-500 mt-1">{errors.caseId}</p>
             )}
             <p className="text-xs text-muted-foreground mt-1">
-              Auto-generated unique ID based on UserType (CH-UM-### or CH-HJ-###)
+              Auto-generated unique ID based on Service Type + UserType (e.g., CH-UM-EA-001 / CH-HJ-HP-001)
             </p>
           </div>
 
@@ -669,11 +751,11 @@ export function DatabasePage() {
             <thead>
               <tr className="bg-primary text-primary-foreground">
                 <th className="text-right px-6 py-3 text-sm font-semibold">CaseID</th>
+                <th className="text-right px-6 py-3 text-sm font-semibold">Service Type</th>
                 <th className="text-right px-6 py-3 text-sm font-semibold">UserType</th>
-                <th className="text-right px-6 py-3 text-sm font-semibold">Account Status</th>
                 <th className="text-right px-6 py-3 text-sm font-semibold">Category</th>
                 <th className="text-right px-6 py-3 text-sm font-semibold">SubCategory</th>
-                <th className="text-right px-6 py-3 text-sm font-semibold">Priority</th>
+                <th className="text-right px-6 py-3 text-sm font-semibold">Active</th>
                 <th className="text-right px-6 py-3 text-sm font-semibold">Last Updated</th>
                 <th className="text-right px-6 py-3 text-sm font-semibold">Actions</th>
               </tr>
@@ -719,9 +801,19 @@ export function DatabasePage() {
                       <span className="text-sm text-foreground">{caseItem.subCategory}</span>
                     </td>
                     <td className="px-6 py-3.5">
-                      <span className="text-sm font-medium text-orange-600 dark:text-orange-400">
-                        {caseItem.priority}
-                      </span>
+                      <div
+                        className="inline-flex items-center gap-2 rounded-full border border-border/80 bg-background/60 px-2 py-1 transition-colors hover:bg-accent/40"
+                        title="Click switch to toggle case status"
+                      >
+                        <Switch
+                          checked={caseItem.isActive !== false}
+                          onCheckedChange={(checked) => handleActiveToggle(caseItem._id, checked)}
+                          className="cursor-pointer shadow-sm data-[state=checked]:bg-emerald-500 data-[state=unchecked]:bg-gray-400 dark:data-[state=unchecked]:bg-gray-600"
+                        />
+                        <span className={`text-xs font-medium ${caseItem.isActive !== false ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-500 dark:text-gray-400'}`}>
+                          {caseItem.isActive !== false ? 'Active' : 'Inactive'}
+                        </span>
+                      </div>
                     </td>
                     <td className="px-6 py-3.5">
                       <span className="text-sm text-muted-foreground">{formatDate(caseItem.updatedAt)}</span>
@@ -734,6 +826,14 @@ export function DatabasePage() {
                           className="bg-cyan-500 hover:bg-cyan-600 text-white text-xs px-3"
                         >
                           Edit
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={() => handleArchiveCase(caseItem._id)}
+                          className="bg-amber-500 hover:bg-amber-600 text-white text-xs px-3"
+                        >
+                          <Archive className="size-3.5 ml-1" />
+                          Archive
                         </Button>
                         <Button
                           size="sm"

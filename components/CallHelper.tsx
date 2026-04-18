@@ -86,6 +86,13 @@ import { GrayAreaWizard, type FlowPath } from "./GrayAreaWizard";
 
 export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
   const ENABLE_AI = import.meta.env.VITE_ENABLE_AI === "true";
+  const USER_TYPE_OPTIONS = [
+    'وكيل خارجي',
+    'شركة عمرة',
+    'مقدم خدمة سكن',
+    'مكتب شؤون',
+    'منظم تابع',
+  ] as const;
 
   // =========================
   // Real call logging (for analytics)
@@ -323,8 +330,7 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
         // No match found - generate generic response
         console.log('❌ No match found, using generic response');
         
-        const entityTypeArabic =
-          entityType === "umrah" ? "شركة عمرة" : "وكيل خارجي";
+      const entityTypeArabic = entityType;
 
         const generated = `السلام عليكم ورحمة الله وبركاته،\n\nتم استقبال بلاغ من العميل: ${customerName}\nنوع الجهة: ${entityTypeArabic}\n\nوصف المشكلة:\n${problemSummary}\n\nتم تسجيل البلاغ في النظام وسيتم المتابعة مع الفريق المختص.\n\nشكراً لتواصلكم معنا.`;
 
@@ -341,8 +347,7 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
       console.error('❌ Error during knowledge base search:', error);
       
       // Fallback to generic response on error
-      const entityTypeArabic =
-        entityType === "umrah" ? "شركة عمرة" : "وكيل خارجي";
+      const entityTypeArabic = entityType;
 
       const generated = `السلام عليكم ورحمة الله وبركاته،\n\nتم استقبال بلاغ من العميل: ${customerName}\nنوع الجهة: ${entityTypeArabic}\n\nوصف المشكلة:\n${problemSummary}\n\nتم تسجيل البلاغ في النظام وسيتم المتابعة مع الفريق المختص.\n\nشكراً لتواصلكم معنا.`;
 
@@ -364,8 +369,7 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
     setIsAlternativeFormat(true);
 
     setTimeout(() => {
-      const entityTypeArabic =
-        entityType === "umrah" ? "شركة عمرة" : "وكيل خارجي";
+      const entityTypeArabic = entityType;
 
       const alternativeGenerated = `مرحباً،\n\nنفيدكم باستلام بلاغكم بخصوص:\nاسم المبلغ: ${customerName}\nطبيعة الجهة: ${entityTypeArabic}\n\nتفاصيل البلاغ:\n${problemSummary}\n\nسيتم دراسة الموضوع والرد عليكم في أقرب وقت.\n\nمع التقدير،`;
 
@@ -518,22 +522,21 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
             {/* Entity Type */}
             <div className="space-y-2">
               <Label htmlFor="entityType" className="text-right block text-foreground font-semibold text-sm">
-                نوع الجهة
+                مقدم الخدمة
               </Label>
               <Select value={entityType} onValueChange={setEntityType} dir="rtl">
                 <SelectTrigger
                   id="entityType"
                   className="text-right glass-panel border focus:border-primary rounded-xl px-4 py-3 [&>span]:text-right text-foreground"
                 >
-                  <SelectValue placeholder="اختر نوع الجهة..." />
+                  <SelectValue placeholder="اختر نوع المستخدم..." />
                 </SelectTrigger>
                 <SelectContent className="glass-card" dir="rtl">
-                  <SelectItem value="umrah" className="text-right cursor-pointer rounded-lg">
-                    شركة عمرة
-                  </SelectItem>
-                  <SelectItem value="external" className="text-right cursor-pointer rounded-lg">
-                    وكيل خارجي
-                  </SelectItem>
+                  {USER_TYPE_OPTIONS.map((option) => (
+                    <SelectItem key={option} value={option} className="text-right cursor-pointer rounded-lg">
+                      {option}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -972,7 +975,7 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
                         
                         // Generate response based on final action
                         // Common variables
-                        const entityTypeArabic = entityType === 'umrah' ? 'شركة عمرة' : 'وكيل خارجي';
+                        const entityTypeArabic = entityType;
                         const problemTypeName = selectedProblemType 
                           ? (PROBLEM_TYPES.find(t => t.id === selectedProblemType)?.name || '')
                           : '';
@@ -997,7 +1000,7 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
                           });
                         } else {
                           // Continue action - generate success message
-                          const entityTypeArabic = entityType === 'umrah' ? 'شركة عمرة' : 'وكيل خارجي';
+                          const entityTypeArabic = entityType;
                           const problemTypeName = selectedProblemType 
                             ? (PROBLEM_TYPES.find(t => t.id === selectedProblemType)?.name || '')
                             : '';
@@ -1063,7 +1066,7 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
           }
           
           // Generate response based on flow path
-          const entityTypeArabic = entityType === 'umrah' ? 'شركة عمرة' : 'وكيل خارجي';
+          const entityTypeArabic = entityType;
           const problemTypeName = flowPath.questionTitle;
           
           // Build flow path description

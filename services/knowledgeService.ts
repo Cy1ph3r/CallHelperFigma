@@ -214,7 +214,7 @@ export function getFormattedResponse(
   customerName: string,
   entityType: string
 ): string {
-  const entityTypeArabic = entityType === 'umrah' ? 'شركة عمرة' : 'وكيل خارجي';
+  const entityTypeArabic = entityType?.trim() || 'غير محدد';
 
   return `السلام عليكم ورحمة الله وبركاته،
 

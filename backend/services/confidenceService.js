@@ -252,7 +252,7 @@ function analyzeFallback(description, startTime, reason) {
   
   // Structure analysis (new enhancement)
   const hasNumbers = /\d+/.test(description);
-  const hasPunctuation = /[،؛.!؟]/.test(description);
+  const hasPunctuation = /[،؛؟,.!?;:()[\]{}]/.test(description);
   if (hasNumbers) score += 5; // Specific numbers/codes mentioned
   if (hasPunctuation) score += 3; // Well-structured sentences
   

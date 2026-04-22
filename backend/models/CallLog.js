@@ -13,8 +13,8 @@ const callLogSchema = new mongoose.Schema({
   },
   entityType: {
     type: String,
-    enum: ['umrah', 'external_agent'],
-    required: true
+    required: true,
+    trim: true
   },
   problemType: {
     type: String,
@@ -23,6 +23,16 @@ const callLogSchema = new mongoose.Schema({
   problemSummary: {
     type: String,
     required: true
+  },
+  matchedCase: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Case',
+    default: null
+  },
+  matchedCaseCode: {
+    type: String,
+    trim: true,
+    default: null
   },
   flowResult: {
     completedSteps: [{
@@ -78,6 +88,7 @@ const callLogSchema = new mongoose.Schema({
 callLogSchema.index({ user: 1, createdAt: -1 });
 callLogSchema.index({ status: 1 });
 callLogSchema.index({ entityType: 1 });
+callLogSchema.index({ matchedCase: 1 });
 
 const CallLog = mongoose.model('CallLog', callLogSchema);
 

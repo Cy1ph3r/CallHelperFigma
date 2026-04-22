@@ -450,7 +450,7 @@ export function KnowledgeBase() {
               <Input
                 id="tags"
                 value={formData.tags.join(', ')}
-                onChange={e => setFormData({ ...formData, tags: e.target.value.split(',').map(t => t.trim()) })}
+                onChange={e => setFormData({ ...formData, tags: e.target.value.split(/[،,]/).map(t => t.trim()) })}
                 className="text-right"
                 placeholder="مثال: حجز, دفع, استفسار"
               />
@@ -509,7 +509,7 @@ export function KnowledgeBase() {
               <Input
                 id="edit-tags"
                 value={formData.tags.join(', ')}
-                onChange={e => setFormData({ ...formData, tags: e.target.value.split(',').map(t => t.trim()) })}
+                onChange={e => setFormData({ ...formData, tags: e.target.value.split(/[،,]/).map(t => t.trim()) })}
                 className="text-right"
               />
             </div>

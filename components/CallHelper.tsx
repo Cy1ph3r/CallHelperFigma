@@ -45,7 +45,6 @@ import {
 } from "lucide-react";
 import { 
   calculateConfidence, 
-  suggestProblemType,
   PROBLEM_TYPES 
 } from "../utils/mockConfidenceData";
 
@@ -101,6 +100,8 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
     generatedResponse: string;
     status: "pending" | "resolved" | "escalated" | "closed";
     flowResult?: unknown;
+    matchedCaseDbId?: string | null;
+    matchedCaseCode?: string | null;
   }) => {
     try {
       const token = localStorage.getItem("token");
@@ -109,7 +110,7 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
       // Only log when we have the minimum required fields for CallLog
       if (!customerName || !entityType || !problemSummary) return;
 
-      await fetch("/api/calls", {
+      const response = await fetch("/api/calls", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -120,11 +121,18 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
           entityType,
           problemType: selectedProblemType || "general",
           problemSummary,
+          matchedCase: params.matchedCaseDbId || null,
+          matchedCaseCode: params.matchedCaseCode || null,
           flowResult: params.flowResult,
           generatedResponse: params.generatedResponse,
           status: params.status,
         }),
       });
+
+      if (!response.ok) {
+        const errorBody = await response.text().catch(() => "");
+        console.warn("⚠️ Failed to save call log:", response.status, errorBody);
+      }
     } catch (error) {
       // Don't block the UX for logging failures
       console.warn("⚠️ Failed to log call for analytics", error);
@@ -199,7 +207,7 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
   const { routes, steps, grayAreaSettings, scoringSettings, getStepsByRoute } = useAdvancedSettings();
 
   // ============ NEW: Auth Context ============
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
 
   // ============ NEW: Get enabled questions only for Gray Area Dialog ============
   const enabledQuestions = grayAreaSettings.questions.filter(q => q.isEnabled);
@@ -242,6 +250,17 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
     action: string;
     timestamp: Date;
   }>>([]);
+  const [debugScoringBreakdown, setDebugScoringBreakdown] = useState<KnowledgeSearchResult['debugBreakdown'] | null>(null);
+  const getScoringWeightValue = (weightName: string, fallback: number): number => {
+    const normalizedTarget = weightName.trim().toLowerCase();
+    const reversedWeights = [...scoringSettings.weights].reverse();
+    const matchedWeight = reversedWeights.find(
+      (weight) => weight.name.trim().toLowerCase() === normalizedTarget
+    );
+    const parsedValue = Number(matchedWeight?.value);
+    if (!Number.isFinite(parsedValue)) return fallback;
+    return Math.max(0, Math.min(100, parsedValue));
+  };
 
   /**
    * Calculate confidence score whenever problem description changes
@@ -268,7 +287,16 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
         }
       });
     } else {
-      setConfidenceScore(100); // Reset when empty
+      // Reset all matching/score UI when description is cleared
+      setConfidenceScore(0);
+      setDescriptionMatchPercentage(0);
+      setMatchedProblem(null);
+      setIsMatchedResponse(false);
+      setGeneratedText('');
+      setActiveButton(null);
+      setWasGrayAreaResolved(false);
+      setSelectedProblemType('');
+      setDebugScoringBreakdown(null);
       cancelDebouncedAnalysis(); // Cancel pending analysis
     }
     
@@ -291,12 +319,30 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
     setSelectedProblemType("");
     setIsAdvancedModeEnabled(false);
     setActiveButton(null);
+    setDebugScoringBreakdown(null);
 
     try {
       // ============ NEW: Search real database only (no mock fallback) ============
       console.log('🔍 Searching knowledge base for:', problemSummary);
+      const keywordMatchWeight = getScoringWeightValue('keywordMatch', 100);
+      const caseUsageFrequencyWeight = getScoringWeightValue('caseUsageFrequency', 0);
+      const caseFreshnessWeight = getScoringWeightValue('caseFreshness', 0);
+      const caseMetadataMatchWeight = getScoringWeightValue('caseMetadataMatch', 0);
+      const userTypeHint = entityType || '';
+      const includeDebugBreakdown = Boolean(isAdmin);
       
-      const searchResult = await searchWithFallback(problemSummary, false);
+      const searchResult = await searchWithFallback(problemSummary, false, {
+        keywordMatchWeight,
+        caseUsageFrequencyWeight,
+        caseFreshnessWeight,
+        caseMetadataMatchWeight,
+        userTypeHint,
+        includeDebugBreakdown,
+      });
+      setDebugScoringBreakdown(searchResult.debugBreakdown || null);
+      if (includeDebugBreakdown && searchResult.debugBreakdown) {
+        console.log('🧪 Matcher debug breakdown:', searchResult.debugBreakdown);
+      }
 
       // If we found a match with good percentage (> 40%), use it
       if (searchResult.isMatched && searchResult.problem) {
@@ -312,6 +358,8 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
         void logCallToBackend({
           generatedResponse: formattedText,
           status: "pending",
+          matchedCaseDbId: searchResult.problem.id,
+          matchedCaseCode: searchResult.problem.description,
         });
         setDescriptionMatchPercentage(searchResult.matchPercentage);
         // Update confidence score to match percentage to prevent gray area warning
@@ -340,6 +388,8 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
           status: "pending",
         });
         setDescriptionMatchPercentage(searchResult.matchPercentage);
+        // Keep displayed score consistent with weighted keyword matching result
+        setConfidenceScore(searchResult.matchPercentage);
         setMatchedProblem(null);
         setIsMatchedResponse(false);
       }
@@ -357,8 +407,10 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
         status: "pending",
       });
       setDescriptionMatchPercentage(0);
+      setConfidenceScore(0);
       setMatchedProblem(null);
       setIsMatchedResponse(false);
+      setDebugScoringBreakdown(null);
     } finally {
       setIsGenerating(false);
     }
@@ -1257,7 +1309,7 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
       </Dialog>
 
       {/* ============ DEBUG PANEL (Admin Only) ============ */}
-      {user?.isAdmin && (
+      {isAdmin && (
         <DebugPanel
           activeRoute={debugActiveRoute}
           currentStep={debugCurrentStep}
@@ -1265,6 +1317,7 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
           action={debugAction}
           finalScore={descriptionMatchPercentage}
           flowLog={debugFlowLog}
+          scoringBreakdown={debugScoringBreakdown}
         />
       )}
     </div>

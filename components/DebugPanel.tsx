@@ -37,6 +37,36 @@ interface DebugPanelProps {
     action: string;
     timestamp: Date;
   }>;
+  scoringBreakdown?: {
+    caseDbId: string;
+    caseId: string;
+    keyword: {
+      rawScore: number;
+      boundedScore: number;
+      weight: number;
+      contribution: number;
+    };
+    usageFrequency: {
+      score: number;
+      weight: number;
+      contribution: number;
+    };
+    freshness?: {
+      score: number;
+      weight: number;
+      contribution: number;
+      createdAt: string | null;
+    };
+    metadata: {
+      overallScore: number;
+      weight: number;
+      contribution: number;
+      userTypeScore: number | null;
+      categoryScore: number | null;
+      subCategoryScore: number | null;
+    };
+    finalScore: number;
+  } | null;
 }
 
 export function DebugPanel({
@@ -46,6 +76,7 @@ export function DebugPanel({
   action,
   finalScore,
   flowLog,
+  scoringBreakdown,
 }: DebugPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
 
@@ -141,6 +172,33 @@ export function DebugPanel({
             }`}>
               {finalScore}%
             </span>
+          </div>
+
+          {/* Matcher Scoring Breakdown */}
+          <div className="space-y-2 pt-3 border-t border-border">
+            <p className="text-xs text-muted-foreground font-semibold">Matcher Factors:</p>
+            {!scoringBreakdown ? (
+              <p className="text-xs text-muted-foreground">لا توجد بيانات بعد</p>
+            ) : (
+              <div className="text-xs glass-panel p-2 rounded-lg space-y-1">
+                <p className="font-semibold text-foreground">
+                  Case: {scoringBreakdown.caseId || scoringBreakdown.caseDbId}
+                </p>
+                <p className="text-muted-foreground">
+                  Keyword: {scoringBreakdown.keyword.contribution.toFixed(2)} (w:{scoringBreakdown.keyword.weight})
+                </p>
+                <p className="text-muted-foreground">
+                  Usage: {scoringBreakdown.usageFrequency.contribution.toFixed(2)} (w:{scoringBreakdown.usageFrequency.weight})
+                </p>
+                <p className="text-muted-foreground">
+                  Freshness: {Number(scoringBreakdown.freshness?.contribution || 0).toFixed(2)} (w:{Number(scoringBreakdown.freshness?.weight || 0)})
+                </p>
+                <p className="text-muted-foreground">
+                  Metadata: {scoringBreakdown.metadata.contribution.toFixed(2)} (w:{scoringBreakdown.metadata.weight})
+                </p>
+                <p className="font-semibold text-primary mt-1">Final: {scoringBreakdown.finalScore}%</p>
+              </div>
+            )}
           </div>
 
           {/* Flow Log */}

@@ -91,6 +91,7 @@ export function AdvancedSettingsPage() {
     getStepsByRoute,
     exportSettings,
     importSettings,
+    saveSettings,
   } = useAdvancedSettings();
 
   // ====================================================================
@@ -126,6 +127,15 @@ export function AdvancedSettingsPage() {
 
   // File input ref for import
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const parseLocaleNumber = (value: string, fallback: number = 0): number => {
+    const normalized = value
+      .replace(/[٠-٩]/g, (digit) => String(digit.charCodeAt(0) - 1632))
+      .replace(/٫|,/g, '.')
+      .trim();
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
 
   // ====================================================================
   // Helper Functions
@@ -405,16 +415,13 @@ export function AdvancedSettingsPage() {
     setNewSubConditionDetails(subCondition.actionDetails || '');
   };
 
-  const handleSaveAllSettings = () => {
-    // في حالة الربط بالباكند، هنا سيتم إرسال جميع الإعدادات
-    // TODO: await fetch('/api/admin/advanced-settings', { method: 'PUT', body: JSON.stringify({ routes, steps, grayAreaSettings, scoringSettings }) });
-    
-    toast.success('تم حفظ جميع الإعدادات بنجاح');
-    console.log('💾 Saving all settings...');
-    console.log('Routes:', routes);
-    console.log('Steps:', steps);
-    console.log('Gray Area Settings:', grayAreaSettings);
-    console.log('Scoring Settings:', scoringSettings);
+  const handleSaveAllSettings = async () => {
+    const saved = await saveSettings();
+    if (saved) {
+      toast.success('تم حفظ جميع الإعدادات بنجاح');
+      return;
+    }
+    toast.error('تعذر حفظ الإعدادات، حاول مرة أخرى');
   };
 
   /** 
@@ -1069,7 +1076,7 @@ export function AdvancedSettingsPage() {
                         updateScoringSettings({
                           scoreThresholds: {
                             ...scoringSettings.scoreThresholds,
-                            directAnswer: parseInt(e.target.value) || 0,
+                            directAnswer: Math.max(0, Math.min(100, Math.round(parseLocaleNumber(e.target.value, 0)))),
                           },
                         })
                       }
@@ -1105,7 +1112,7 @@ export function AdvancedSettingsPage() {
                         updateScoringSettings({
                           scoreThresholds: {
                             ...scoringSettings.scoreThresholds,
-                            showAdvanced: parseInt(e.target.value) || 0,
+                            showAdvanced: Math.max(0, Math.min(100, Math.round(parseLocaleNumber(e.target.value, 0)))),
                           },
                         })
                       }
@@ -1141,7 +1148,7 @@ export function AdvancedSettingsPage() {
                         updateScoringSettings({
                           scoreThresholds: {
                             ...scoringSettings.scoreThresholds,
-                            grayArea: parseInt(e.target.value) || 0,
+                            grayArea: Math.max(0, Math.min(100, Math.round(parseLocaleNumber(e.target.value, 0)))),
                           },
                         })
                       }
@@ -1218,7 +1225,10 @@ export function AdvancedSettingsPage() {
                       value={weight.value}
                       onChange={(e) => {
                         const newWeights = [...scoringSettings.weights];
-                        newWeights[index] = { ...weight, value: parseFloat(e.target.value) || 0 };
+                        newWeights[index] = {
+                          ...weight,
+                          value: Math.max(0, Math.min(100, parseLocaleNumber(e.target.value, 0))),
+                        };
                         updateScoringSettings({ weights: newWeights });
                       }}
                       className="glass-card border-2 border-border w-20 h-8"
@@ -1280,7 +1290,7 @@ export function AdvancedSettingsPage() {
                 value={scoringSettings.decayRateDays}
                 onChange={(e) =>
                   updateScoringSettings({
-                    decayRateDays: parseInt(e.target.value) || 1,
+                    decayRateDays: Math.max(1, Math.round(parseLocaleNumber(e.target.value, 1))),
                   })
                 }
                 className="glass-card border-2 border-border w-20 h-8 text-center"

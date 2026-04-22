@@ -11,6 +11,99 @@ import { generateAIResponse } from '../services/aiService.js';
 import { analyzeConfidence } from '../services/confidenceService.js';
 
 const router = express.Router();
+const SCORING_SETTINGS_KEY = 'advanced_scoring_settings';
+const DEFAULT_SCORING_SETTINGS = {
+  scoreThresholds: {
+    directAnswer: 80,
+    showAdvanced: 50,
+    grayArea: 50,
+  },
+  weights: [
+    { name: 'keywordMatch', value: 100 },
+    { name: 'caseUsageFrequency', value: 0 },
+    { name: 'caseFreshness', value: 0 },
+    { name: 'caseMetadataMatch', value: 0 },
+  ],
+  decayRateDays: 30,
+};
+const REQUIRED_SCORING_WEIGHTS = [
+  { name: 'keywordMatch', defaultValue: 100 },
+  { name: 'caseUsageFrequency', defaultValue: 0 },
+  { name: 'caseFreshness', defaultValue: 0 },
+  { name: 'caseMetadataMatch', defaultValue: 0 },
+];
+
+const clampPercentage = (value, fallback = 0) => {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return fallback;
+  return Math.max(0, Math.min(100, numericValue));
+};
+
+const normalizeScoringSettings = (rawSettings = {}) => {
+  const requiredDefaultsByName = new Map(
+    REQUIRED_SCORING_WEIGHTS.map((weight) => [weight.name.toLowerCase(), weight.defaultValue])
+  );
+  const requiredCanonicalNameByName = new Map(
+    REQUIRED_SCORING_WEIGHTS.map((weight) => [weight.name.toLowerCase(), weight.name])
+  );
+  const groupedWeights = new Map();
+  const rawWeights = Array.isArray(rawSettings.weights)
+    ? rawSettings.weights
+    : DEFAULT_SCORING_SETTINGS.weights;
+
+  rawWeights.forEach((weight) => {
+    if (!weight || typeof weight.name !== 'string') return;
+    const normalizedName = weight.name.trim().toLowerCase();
+    if (!normalizedName) return;
+
+    const normalizedWeight = {
+      name: weight.name.trim(),
+      value: clampPercentage(weight.value, 0),
+    };
+    const group = groupedWeights.get(normalizedName) || [];
+    group.push(normalizedWeight);
+    groupedWeights.set(normalizedName, group);
+  });
+
+  const normalizedWeights = [];
+  groupedWeights.forEach((group, normalizedName) => {
+    let resolvedWeight = group[group.length - 1];
+    const requiredDefault = requiredDefaultsByName.get(normalizedName);
+    if (requiredDefault !== undefined) {
+      const latestNonDefault = [...group].reverse().find((weight) => weight.value !== requiredDefault);
+      if (latestNonDefault) {
+        resolvedWeight = latestNonDefault;
+      }
+      resolvedWeight = {
+        ...resolvedWeight,
+        name: requiredCanonicalNameByName.get(normalizedName) || resolvedWeight.name,
+      };
+    }
+    normalizedWeights.push(resolvedWeight);
+  });
+
+  REQUIRED_SCORING_WEIGHTS.forEach((requiredWeight) => {
+    const exists = normalizedWeights.some(
+      (weight) => weight.name.trim().toLowerCase() === requiredWeight.name.toLowerCase()
+    );
+    if (!exists) {
+      normalizedWeights.push({
+        name: requiredWeight.name,
+        value: requiredWeight.defaultValue,
+      });
+    }
+  });
+
+  return {
+    scoreThresholds: {
+      directAnswer: clampPercentage(rawSettings?.scoreThresholds?.directAnswer, DEFAULT_SCORING_SETTINGS.scoreThresholds.directAnswer),
+      showAdvanced: clampPercentage(rawSettings?.scoreThresholds?.showAdvanced, DEFAULT_SCORING_SETTINGS.scoreThresholds.showAdvanced),
+      grayArea: clampPercentage(rawSettings?.scoreThresholds?.grayArea, DEFAULT_SCORING_SETTINGS.scoreThresholds.grayArea),
+    },
+    weights: normalizedWeights,
+    decayRateDays: Math.max(1, Number(rawSettings?.decayRateDays || DEFAULT_SCORING_SETTINGS.decayRateDays)),
+  };
+};
 
 // Auth routes
 router.use('/auth', authRoutes);
@@ -105,6 +198,9 @@ router.post('/calls', authenticate, async (req, res) => {
     await callLog.save();
     res.status(201).json({ success: true, data: callLog });
   } catch (error) {
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ success: false, message: error.message });
+    }
     res.status(500).json({ success: false, message: error.message });
   }
 });
@@ -302,16 +398,53 @@ router.get('/settings', authenticate, async (req, res) => {
 
 router.put('/settings/:key', authenticate, authorize('admin'), async (req, res) => {
   try {
+    const isScoringAlias = req.params.key === 'scoring' || req.params.key === SCORING_SETTINGS_KEY;
+    const resolvedKey = isScoringAlias ? SCORING_SETTINGS_KEY : req.params.key;
+    const updatePayload = isScoringAlias
+      ? {
+          key: resolvedKey,
+          value: normalizeScoringSettings(req.body || {}),
+          category: 'thresholds',
+          description: 'Advanced scoring settings for Call Helper',
+          isPublic: true,
+          updatedBy: req.user._id,
+        }
+      : { ...req.body, updatedBy: req.user._id };
     const setting = await Settings.findOneAndUpdate(
-      { key: req.params.key },
-      { ...req.body, updatedBy: req.user._id },
+      { key: resolvedKey },
+      updatePayload,
       { new: true, upsert: true }
     );
+    if (isScoringAlias) {
+      return res.json({ success: true, data: setting.value });
+    }
     res.json({ success: true, data: setting });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 });
+
+router.get('/settings/scoring', authenticate, async (req, res) => {
+  try {
+    const setting = await Settings.findOne({ key: SCORING_SETTINGS_KEY });
+    if (!setting) {
+      const normalizedDefault = normalizeScoringSettings(DEFAULT_SCORING_SETTINGS);
+      return res.json({ success: true, data: normalizedDefault });
+    }
+
+    const normalizedSettings = normalizeScoringSettings(setting.value || {});
+    if (JSON.stringify(setting.value || {}) !== JSON.stringify(normalizedSettings)) {
+      setting.value = normalizedSettings;
+      setting.updatedBy = req.user._id;
+      await setting.save();
+    }
+
+    res.json({ success: true, data: normalizedSettings });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 
 // AI response generation endpoint
 // Integrated with AI service (OpenAI/Claude) as per BACKEND_INTEGRATION_GUIDE.md
@@ -416,6 +549,43 @@ router.get('/cases', authenticate, async (req, res) => {
   }
 });
 
+router.get('/cases/usage-counts', authenticate, async (req, res) => {
+  try {
+    const usageCounts = await CallLog.aggregate([
+      {
+        $match: {
+          matchedCase: { $ne: null }
+        }
+      },
+      {
+        $group: {
+          _id: '$matchedCase',
+          usageCount: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const caseIds = usageCounts.map((entry) => entry._id);
+    const matchedCases = await Case.find(
+      { _id: { $in: caseIds } },
+      { caseId: 1 }
+    );
+
+    const caseCodeById = new Map(
+      matchedCases.map((caseItem) => [caseItem._id.toString(), caseItem.caseId])
+    );
+
+    const data = usageCounts.map((entry) => ({
+      caseDbId: entry._id.toString(),
+      caseId: caseCodeById.get(entry._id.toString()) || null,
+      usageCount: entry.usageCount
+    }));
+
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
 router.post('/cases', authenticate, authorize('admin', 'moderator'), async (req, res) => {
   try {
     const newCase = new Case({

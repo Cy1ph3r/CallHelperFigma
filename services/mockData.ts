@@ -406,7 +406,7 @@ export function findBestMatchingProblem(
   const normalizedUserDesc = userDescription
     .toLowerCase()
     .trim()
-    .replace(/[.,!?;:()\[\]{}]/g, " ") // Remove punctuation
+    .replace(/[.,!?;:()\[\]{}،؛؟]/g, " ") // Remove punctuation
     .replace(/\s+/g, " "); // Normalize spaces
 
   const userWords = normalizedUserDesc.split(" ");

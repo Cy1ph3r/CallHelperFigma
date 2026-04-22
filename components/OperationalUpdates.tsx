@@ -413,7 +413,7 @@ export function OperationalUpdates() {
               <Input
                 id="services"
                 value={formData.affectedServices.join(', ')}
-                onChange={e => setFormData({ ...formData, affectedServices: e.target.value.split(',').map(s => s.trim()) })}
+                onChange={e => setFormData({ ...formData, affectedServices: e.target.value.split(/[،,]/).map(s => s.trim()) })}
                 className="text-right"
                 placeholder="مثال: نظام الحجز, البوابة الإلكترونية"
               />

@@ -49,6 +49,7 @@ const SUBTYPE_CASE_CODE: Record<string, string> = {
 
 export function DatabasePage() {
   const [cases, setCases] = useState<Case[]>([]);
+  const [usageCounts, setUsageCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingCase, setEditingCase] = useState<Case | null>(null);
@@ -168,9 +169,27 @@ export function DatabasePage() {
 
       const data = await response.json();
       setCases(data.data || []);
+
+      const usageResponse = await fetch('http://localhost:5000/api/cases/usage-counts', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (usageResponse.ok) {
+        const usageData = await usageResponse.json();
+        const usageMap: Record<string, number> = {};
+        (usageData.data || []).forEach((entry: { caseDbId: string; usageCount: number }) => {
+          usageMap[entry.caseDbId] = entry.usageCount;
+        });
+        setUsageCounts(usageMap);
+      } else {
+        setUsageCounts({});
+      }
     } catch (error) {
       console.error('Error fetching cases:', error);
       toast.error('فشل في تحميل الحالات');
+      setUsageCounts({});
     } finally {
       setLoading(false);
     }
@@ -751,6 +770,7 @@ export function DatabasePage() {
             <thead>
               <tr className="bg-primary text-primary-foreground">
                 <th className="text-right px-6 py-3 text-sm font-semibold">CaseID</th>
+                <th className="text-right px-6 py-3 text-sm font-semibold">Used</th>
                 <th className="text-right px-6 py-3 text-sm font-semibold">Service Type</th>
                 <th className="text-right px-6 py-3 text-sm font-semibold">UserType</th>
                 <th className="text-right px-6 py-3 text-sm font-semibold">Category</th>
@@ -763,7 +783,7 @@ export function DatabasePage() {
             <tbody className="bg-background">
               {cases.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-12">
+                  <td colSpan={9} className="text-center py-12">
                     <div className="flex flex-col items-center gap-3">
                       <Plus className="size-12 text-muted-foreground" />
                       <p className="text-muted-foreground">No cases found. Add your first case!</p>
@@ -787,6 +807,9 @@ export function DatabasePage() {
                   >
                     <td className="px-6 py-3.5">
                       <span className="text-sm font-medium text-foreground">{caseItem.caseId}</span>
+                    </td>
+                    <td className="px-6 py-3.5">
+                      <span className="text-sm font-semibold text-primary">{usageCounts[caseItem._id] ?? 0}</span>
                     </td>
                     <td className="px-6 py-3.5">
                       <span className="text-sm text-foreground">{caseItem.userType}</span>

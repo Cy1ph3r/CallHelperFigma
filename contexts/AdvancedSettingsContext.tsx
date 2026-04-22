@@ -253,6 +253,7 @@ interface AdvancedSettingsContextType {
   // Export/Import Settings
   exportSettings: () => any;
   importSettings: (settings: any) => boolean;
+  saveSettings: () => Promise<boolean>;
 }
 
 // ====================================================================
@@ -484,12 +485,169 @@ const MOCK_SCORING_SETTINGS: ScoringSettings = {
     grayArea: 50,      // < 50: Gray Area (أسئلة توضيحية)
   },
   weights: [
-    { name: 'keywordMatch', value: 50 },
-    { name: 'descriptionLength', value: 20 },
-    { name: 'entityType', value: 15 },
-    { name: 'problemType', value: 15 },
+    { name: 'keywordMatch', value: 100 },
+    { name: 'caseUsageFrequency', value: 0 },
+    { name: 'caseFreshness', value: 0 },
+    { name: 'caseMetadataMatch', value: 0 },
   ],
   decayRateDays: 30,
+};
+
+const ADVANCED_SETTINGS_STORAGE_KEY = 'advanced_settings_v1';
+const SCORING_SETTINGS_API_PATH = '/api/settings/scoring';
+
+type PersistedAdvancedSettings = {
+  routes?: Route[];
+  steps?: Step[];
+  grayAreaSettings?: GrayAreaSettings;
+  scoringSettings?: ScoringSettings;
+};
+
+const REQUIRED_SCORING_WEIGHTS: Array<{ name: string; defaultValue: number }> = [
+  { name: 'keywordMatch', defaultValue: 100 },
+  { name: 'caseUsageFrequency', defaultValue: 0 },
+  { name: 'caseFreshness', defaultValue: 0 },
+  { name: 'caseMetadataMatch', defaultValue: 0 },
+];
+const normalizeScoringWeights = (weights: Array<{ name: string; value: number }>): Array<{ name: string; value: number }> => {
+  const groupedByName = new Map<string, Array<{ name: string; value: number }>>();
+  const requiredDefaultsByName = new Map(
+    REQUIRED_SCORING_WEIGHTS.map((weight) => [weight.name.toLowerCase(), weight.defaultValue])
+  );
+  const requiredCanonicalNameByName = new Map(
+    REQUIRED_SCORING_WEIGHTS.map((weight) => [weight.name.toLowerCase(), weight.name])
+  );
+
+  weights.forEach((weight) => {
+    const normalizedName = weight.name.trim().toLowerCase();
+    if (!normalizedName) return;
+    const normalizedWeight = {
+      name: weight.name.trim(),
+      value: Math.max(0, Math.min(100, Number(weight.value || 0))),
+    };
+    const group = groupedByName.get(normalizedName) || [];
+    group.push(normalizedWeight);
+    groupedByName.set(normalizedName, group);
+  });
+
+  const resolvedWeights: Array<{ name: string; value: number }> = [];
+  groupedByName.forEach((group, normalizedName) => {
+    let resolvedWeight = group[group.length - 1]; // Latest by default
+    const requiredDefault = requiredDefaultsByName.get(normalizedName);
+
+    // For required weights, prefer the latest non-default value if it exists.
+    if (requiredDefault !== undefined) {
+      const latestNonDefault = [...group].reverse().find((weight) => weight.value !== requiredDefault);
+      if (latestNonDefault) {
+        resolvedWeight = latestNonDefault;
+      }
+      resolvedWeight = {
+        ...resolvedWeight,
+        name: requiredCanonicalNameByName.get(normalizedName) || resolvedWeight.name,
+      };
+    }
+
+    resolvedWeights.push(resolvedWeight);
+  });
+
+  return resolvedWeights;
+};
+
+const ensureRequiredScoringWeights = (settings: ScoringSettings): ScoringSettings => {
+  const existingWeights = normalizeScoringWeights(settings.weights || []);
+  const existingWeightNames = new Set(
+    existingWeights.map((weight) => weight.name.trim().toLowerCase())
+  );
+
+  const missingWeights = REQUIRED_SCORING_WEIGHTS
+    .filter((requiredWeight) => !existingWeightNames.has(requiredWeight.name.toLowerCase()))
+    .map((requiredWeight) => ({
+      name: requiredWeight.name,
+      value: requiredWeight.defaultValue,
+    }));
+
+  return {
+    ...settings,
+    weights: [...existingWeights, ...missingWeights],
+  };
+};
+
+const loadPersistedAdvancedSettings = (): PersistedAdvancedSettings | null => {
+  try {
+    const raw = localStorage.getItem(ADVANCED_SETTINGS_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return parsed as PersistedAdvancedSettings;
+  } catch (error) {
+    console.warn('⚠️ Failed to load persisted advanced settings:', error);
+    return null;
+  }
+};
+
+const persistAdvancedSettings = (settings: PersistedAdvancedSettings): boolean => {
+  try {
+    localStorage.setItem(ADVANCED_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    return true;
+  } catch (error) {
+    console.warn('⚠️ Failed to persist advanced settings:', error);
+    return false;
+  }
+};
+
+const getAuthToken = (): string | null => {
+  const token = localStorage.getItem('token');
+  if (!token || token === 'local-auth-token') return null;
+  return token;
+};
+
+const fetchScoringSettingsFromApi = async (): Promise<ScoringSettings | null> => {
+  const token = getAuthToken();
+  if (!token) return null;
+
+  try {
+    const response = await fetch(SCORING_SETTINGS_API_PATH, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) return null;
+
+    const payload = await response.json();
+    if (!payload?.success || !payload?.data) return null;
+
+    return payload.data as ScoringSettings;
+  } catch (error) {
+    console.warn('⚠️ Failed to fetch scoring settings from API:', error);
+    return null;
+  }
+};
+
+const persistScoringSettingsToApi = async (settings: ScoringSettings): Promise<boolean> => {
+  const token = getAuthToken();
+  if (!token) return false;
+
+  try {
+    const response = await fetch(SCORING_SETTINGS_API_PATH, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify(settings),
+    });
+
+    if (!response.ok) return false;
+
+    const payload = await response.json();
+    return Boolean(payload?.success);
+  } catch (error) {
+    console.warn('⚠️ Failed to persist scoring settings to API:', error);
+    return false;
+  }
 };
 
 // ====================================================================
@@ -503,11 +661,53 @@ const AdvancedSettingsContext = createContext<AdvancedSettingsContextType | unde
 // ====================================================================
 
 export function AdvancedSettingsProvider({ children }: { children: ReactNode }) {
+  const persistedSettings = loadPersistedAdvancedSettings();
+  const normalizedPersistedScoringSettings = persistedSettings?.scoringSettings
+    ? ensureRequiredScoringWeights(persistedSettings.scoringSettings)
+    : null;
   // State Management
-  const [routes, setRoutes] = useState<Route[]>(MOCK_ROUTES);
-  const [steps, setSteps] = useState<Step[]>(MOCK_STEPS);
-  const [grayAreaSettings, setGrayAreaSettings] = useState<GrayAreaSettings>(MOCK_GRAY_AREA_SETTINGS);
-  const [scoringSettings, setScoringSettings] = useState<ScoringSettings>(MOCK_SCORING_SETTINGS);
+  const [routes, setRoutes] = useState<Route[]>(persistedSettings?.routes || MOCK_ROUTES);
+  const [steps, setSteps] = useState<Step[]>(persistedSettings?.steps || MOCK_STEPS);
+  const [grayAreaSettings, setGrayAreaSettings] = useState<GrayAreaSettings>(persistedSettings?.grayAreaSettings || MOCK_GRAY_AREA_SETTINGS);
+  const [scoringSettings, setScoringSettings] = useState<ScoringSettings>(
+    ensureRequiredScoringWeights(persistedSettings?.scoringSettings || MOCK_SCORING_SETTINGS)
+  );
+  const normalizedDefaultScoringSettings = ensureRequiredScoringWeights(MOCK_SCORING_SETTINGS);
+
+  useEffect(() => {
+    const loadScoringSettings = async () => {
+      const apiScoringSettings = await fetchScoringSettingsFromApi();
+      if (!apiScoringSettings) return;
+      const normalizedApiScoringSettings = ensureRequiredScoringWeights(apiScoringSettings);
+      const hasLocalCustomScoringSettings = Boolean(normalizedPersistedScoringSettings)
+        && JSON.stringify(normalizedPersistedScoringSettings) !== JSON.stringify(normalizedDefaultScoringSettings);
+      const isApiDefaultScoringSettings = JSON.stringify(normalizedApiScoringSettings) === JSON.stringify(normalizedDefaultScoringSettings);
+
+      if (hasLocalCustomScoringSettings && isApiDefaultScoringSettings) {
+        return;
+      }
+
+      setScoringSettings(normalizedApiScoringSettings);
+    };
+
+    void loadScoringSettings();
+  }, []);
+
+  // One-time migration: persist normalized scoring weights so stale stored entries don't override user edits on reload.
+  useEffect(() => {
+    if (!persistedSettings?.scoringSettings || !normalizedPersistedScoringSettings) return;
+
+    const persistedWeights = JSON.stringify(persistedSettings.scoringSettings.weights || []);
+    const normalizedWeights = JSON.stringify(normalizedPersistedScoringSettings.weights || []);
+    if (persistedWeights === normalizedWeights) return;
+
+    persistAdvancedSettings({
+      routes: persistedSettings.routes || routes,
+      steps: persistedSettings.steps || steps,
+      grayAreaSettings: persistedSettings.grayAreaSettings || grayAreaSettings,
+      scoringSettings: normalizedPersistedScoringSettings,
+    });
+  }, []);
 
   /**
    * TODO: Replace with API call when backend is ready
@@ -700,6 +900,25 @@ export function AdvancedSettingsProvider({ children }: { children: ReactNode }) 
 
       console.log('✅ SubCondition added to step (root level):', stepId, newSubCondition);
     }
+  };
+
+  /**
+   * Persist current settings explicitly (used by Save button)
+   */
+  const saveSettings = async (): Promise<boolean> => {
+    const normalizedScoringSettings = ensureRequiredScoringWeights(scoringSettings);
+    const hasAuthenticatedSession = Boolean(getAuthToken());
+    const persistedLocally = persistAdvancedSettings({
+      routes,
+      steps,
+      grayAreaSettings,
+      scoringSettings: normalizedScoringSettings,
+    });
+    if (!hasAuthenticatedSession) {
+      return persistedLocally;
+    }
+    const persistedToApi = await persistScoringSettingsToApi(normalizedScoringSettings);
+    return persistedToApi;
   };
 
   /**
@@ -1037,7 +1256,10 @@ export function AdvancedSettingsProvider({ children }: { children: ReactNode }) 
    * await fetch('/api/admin/scoring-settings', { method: 'PUT', body: JSON.stringify(updates) });
    */
   const updateScoringSettings = (updates: Partial<ScoringSettings>) => {
-    setScoringSettings(prev => ({ ...prev, ...updates }));
+    setScoringSettings(prev => {
+      const merged = { ...prev, ...updates };
+      return ensureRequiredScoringWeights(merged);
+    });
     console.log('✅ Scoring Settings updated:', updates);
   };
 
@@ -1183,8 +1405,15 @@ export function AdvancedSettingsProvider({ children }: { children: ReactNode }) 
       }
       
       if (settings.data.scoringSettings) {
-        setScoringSettings(settings.data.scoringSettings);
+        setScoringSettings(ensureRequiredScoringWeights(settings.data.scoringSettings));
       }
+
+      persistAdvancedSettings({
+        routes: settings.data.routes,
+        steps: settings.data.steps,
+        grayAreaSettings: settings.data.grayAreaSettings || grayAreaSettings,
+        scoringSettings: ensureRequiredScoringWeights(settings.data.scoringSettings || scoringSettings),
+      });
 
       console.log('✅ Settings imported successfully');
       return true;
@@ -1234,6 +1463,7 @@ export function AdvancedSettingsProvider({ children }: { children: ReactNode }) 
     // Export/Import Settings
     exportSettings,
     importSettings,
+    saveSettings,
   };
 
   return (

@@ -40,11 +40,27 @@ interface DebugPanelProps {
   scoringBreakdown?: {
     caseDbId: string;
     caseId: string;
+    preFilter: {
+      skippedByUserTypeOrServiceType: Array<{
+        caseDbId: string;
+        caseId: string;
+        caseUserType: string | null;
+        caseServiceType: string | null;
+        selectedUserTypeHint: string | null;
+        reason: string;
+      }>;
+    };
     keyword: {
       rawScore: number;
       boundedScore: number;
       weight: number;
       contribution: number;
+      findings: {
+        matchedMainKeywords: string[];
+        matchedExtraKeywords: string[];
+        matchedSynonyms: string[];
+        matchedUserWordsInCaseText: string[];
+      };
     };
     usageFrequency: {
       score: number;
@@ -64,6 +80,16 @@ interface DebugPanelProps {
       userTypeScore: number | null;
       categoryScore: number | null;
       subCategoryScore: number | null;
+      findings: {
+        userTypeHint: string | null;
+        caseUserType: string | null;
+        caseAccountStatus: string | null;
+        userTypeMatched: boolean | null;
+        categoryMatchedTokens: string[];
+        categoryTotalTokens: string[];
+        subCategoryMatchedTokens: string[];
+        subCategoryTotalTokens: string[];
+      };
     };
     finalScore: number;
   } | null;
@@ -196,6 +222,53 @@ export function DebugPanel({
                 <p className="text-muted-foreground">
                   Metadata: {scoringBreakdown.metadata.contribution.toFixed(2)} (w:{scoringBreakdown.metadata.weight})
                 </p>
+                <div className="border border-border rounded-md p-2 bg-background/40 space-y-1">
+                  <p className="font-semibold text-foreground">Findings</p>
+                  <p className="text-muted-foreground">
+                    Main keywords matched: {scoringBreakdown.keyword.findings.matchedMainKeywords.length > 0 ? scoringBreakdown.keyword.findings.matchedMainKeywords.join('، ') : 'None'}
+                  </p>
+                  <p className="text-muted-foreground">
+                    Extra keywords matched: {scoringBreakdown.keyword.findings.matchedExtraKeywords.length > 0 ? scoringBreakdown.keyword.findings.matchedExtraKeywords.join('، ') : 'None'}
+                  </p>
+                  <p className="text-muted-foreground">
+                    Synonyms matched: {scoringBreakdown.keyword.findings.matchedSynonyms.length > 0 ? scoringBreakdown.keyword.findings.matchedSynonyms.join('، ') : 'None'}
+                  </p>
+                  <p className="text-muted-foreground">
+                    User words found in case terms: {scoringBreakdown.keyword.findings.matchedUserWordsInCaseText.length > 0 ? scoringBreakdown.keyword.findings.matchedUserWordsInCaseText.join('، ') : 'None'}
+                  </p>
+                  <p className="text-muted-foreground">
+                    Freshness source date: {scoringBreakdown.freshness?.createdAt || 'N/A'}
+                  </p>
+                  <p className="text-muted-foreground">
+                    Freshness normalized score: {Number(scoringBreakdown.freshness?.score || 0).toFixed(2)}
+                  </p>
+                  <p className="text-muted-foreground">
+                    UserType selected vs case: {(scoringBreakdown.metadata.findings.userTypeHint || 'N/A')} ↔ {(scoringBreakdown.metadata.findings.caseUserType || scoringBreakdown.metadata.findings.caseAccountStatus || 'N/A')}
+                  </p>
+                  <p className="text-muted-foreground">
+                    UserType matched: {scoringBreakdown.metadata.findings.userTypeMatched === null ? 'N/A' : scoringBreakdown.metadata.findings.userTypeMatched ? 'Yes' : 'No'}
+                  </p>
+                  <p className="text-muted-foreground">
+                    Category tokens matched: {scoringBreakdown.metadata.findings.categoryMatchedTokens.length}/{scoringBreakdown.metadata.findings.categoryTotalTokens.length}
+                    {scoringBreakdown.metadata.findings.categoryMatchedTokens.length > 0 ? ` (${scoringBreakdown.metadata.findings.categoryMatchedTokens.join('، ')})` : ''}
+                  </p>
+                  <p className="text-muted-foreground">
+                    SubCategory tokens matched: {scoringBreakdown.metadata.findings.subCategoryMatchedTokens.length}/{scoringBreakdown.metadata.findings.subCategoryTotalTokens.length}
+                    {scoringBreakdown.metadata.findings.subCategoryMatchedTokens.length > 0 ? ` (${scoringBreakdown.metadata.findings.subCategoryMatchedTokens.join('، ')})` : ''}
+                  </p>
+                  <p className="text-muted-foreground">
+                    Skipped by UserType/ServiceType pre-filter: {scoringBreakdown.preFilter.skippedByUserTypeOrServiceType.length > 0 ? 'Yes' : 'No'}
+                  </p>
+                  {scoringBreakdown.preFilter.skippedByUserTypeOrServiceType.length > 0 && (
+                    <div className="space-y-1 pl-2 border-l border-border/70">
+                      {scoringBreakdown.preFilter.skippedByUserTypeOrServiceType.slice(0, 8).map((skippedCase) => (
+                        <p key={skippedCase.caseDbId || skippedCase.caseId} className="text-muted-foreground">
+                          {skippedCase.caseId || skippedCase.caseDbId}: {skippedCase.reason}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <p className="font-semibold text-primary mt-1">Final: {scoringBreakdown.finalScore}%</p>
               </div>
             )}

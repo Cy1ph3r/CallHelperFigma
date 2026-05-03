@@ -17,11 +17,27 @@ export interface KnowledgeSearchResult {
   debugBreakdown?: {
     caseDbId: string;
     caseId: string;
+    preFilter: {
+      skippedByUserTypeOrServiceType: Array<{
+        caseDbId: string;
+        caseId: string;
+        caseUserType: string | null;
+        caseServiceType: string | null;
+        selectedUserTypeHint: string | null;
+        reason: string;
+      }>;
+    };
     keyword: {
       rawScore: number;
       boundedScore: number;
       weight: number;
       contribution: number;
+      findings: {
+        matchedMainKeywords: string[];
+        matchedExtraKeywords: string[];
+        matchedSynonyms: string[];
+        matchedUserWordsInCaseText: string[];
+      };
     };
     usageFrequency: {
       score: number;
@@ -41,6 +57,16 @@ export interface KnowledgeSearchResult {
       userTypeScore: number | null;
       categoryScore: number | null;
       subCategoryScore: number | null;
+      findings: {
+        userTypeHint: string | null;
+        caseUserType: string | null;
+        caseAccountStatus: string | null;
+        userTypeMatched: boolean | null;
+        categoryMatchedTokens: string[];
+        categoryTotalTokens: string[];
+        subCategoryMatchedTokens: string[];
+        subCategoryTotalTokens: string[];
+      };
     };
     finalScore: number;
   };
@@ -176,6 +202,36 @@ function findBestMatchInCases(
   weights?: MatchingWeightsOptions,
   caseUsageStats: CaseUsageStats = getEmptyCaseUsageStats()
 ): KnowledgeSearchResult {
+  const normalizeArabicToken = (token: string): string => {
+    if (!token) return '';
+    let normalized = token
+      .replace(/[\u064B-\u0652\u0670]/g, '') // remove Arabic diacritics
+      .replace(/ـ/g, '') // tatweel
+      .replace(/[أإآٱ]/g, 'ا')
+      .replace(/ى/g, 'ي')
+      .replace(/ؤ/g, 'و')
+      .replace(/ئ/g, 'ي')
+      .replace(/ة/g, 'ه');
+
+    const prefixCandidates = ['وال', 'بال', 'كال', 'فال', 'لل', 'ال', 'و', 'ف', 'ب', 'ك', 'ل'];
+    const suffixCandidates = ['يات', 'ات', 'ون', 'ين', 'ان', 'ها', 'هم', 'هن', 'كم', 'كن', 'نا', 'يه', 'ه', 'ة', 'ي', 'ك', 'ت', 'ا', 'و', 'ن'];
+
+    for (const prefix of prefixCandidates) {
+      if (normalized.startsWith(prefix) && normalized.length - prefix.length >= 3) {
+        normalized = normalized.slice(prefix.length);
+        break;
+      }
+    }
+
+    for (const suffix of suffixCandidates) {
+      if (normalized.endsWith(suffix) && normalized.length - suffix.length >= 3) {
+        normalized = normalized.slice(0, -suffix.length);
+        break;
+      }
+    }
+
+    return normalized;
+  };
   const normalizeForMatching = (text: string): string => {
     if (!text) return '';
     return text
@@ -185,7 +241,8 @@ function findBestMatchInCases(
       .replace(/\s+/g, ' ')
       .split(' ')
       .filter(Boolean)
-      .map((token) => token.replace(/^ال(?=.)/, ''))
+      .map((token) => normalizeArabicToken(token))
+      .filter(Boolean)
       .join(' ');
   };
 
@@ -207,19 +264,61 @@ function findBestMatchInCases(
   const normalizedCategoryHint = normalizeForMatching(weights?.categoryHint || '');
   const normalizedSubCategoryHint = normalizeForMatching(weights?.subCategoryHint || '');
   const includeDebugBreakdown = Boolean(weights?.includeDebugBreakdown);
+  const isHintMatched = (hint: string, candidate: string): boolean => {
+    if (!hint || !candidate) return false;
+    return candidate === hint || candidate.includes(hint) || hint.includes(candidate);
+  };
+  const skippedByUserTypeOrServiceType: Array<{
+    caseDbId: string;
+    caseId: string;
+    caseUserType: string | null;
+    caseServiceType: string | null;
+    selectedUserTypeHint: string | null;
+    reason: string;
+  }> = [];
 
   let bestMatch = {
     problem: null as any,
     matchPercentage: 0,
     debugBreakdown: undefined as KnowledgeSearchResult['debugBreakdown'],
   };
-  const caseCreatedAtMsList = cases
-    .map((caseItem) => new Date(caseItem?.createdAt || caseItem?.updatedAt || 0).getTime())
+  const getCaseFreshnessTimestampMs = (caseItem: any): number =>
+    new Date(caseItem?.updatedAt || caseItem?.createdAt || 0).getTime();
+  const eligibleCasesForFreshness = cases.filter((caseItem) => {
+    if (!normalizedUserTypeHint) return true;
+    const normalizedCaseUserType = normalizeForMatching(caseItem.userType || '');
+    const normalizedCaseAccountStatus = normalizeForMatching(caseItem.accountStatus || '');
+    return (
+      isHintMatched(normalizedUserTypeHint, normalizedCaseUserType)
+      || isHintMatched(normalizedUserTypeHint, normalizedCaseAccountStatus)
+    );
+  });
+  const caseCreatedAtMsList = eligibleCasesForFreshness
+    .map((caseItem) => getCaseFreshnessTimestampMs(caseItem))
     .filter((timestamp) => Number.isFinite(timestamp) && timestamp > 0);
   const minCaseCreatedAtMs = caseCreatedAtMsList.length > 0 ? Math.min(...caseCreatedAtMsList) : 0;
   const maxCaseCreatedAtMs = caseCreatedAtMsList.length > 0 ? Math.max(...caseCreatedAtMsList) : 0;
 
   cases.forEach((caseItem) => {
+    const normalizedCaseUserType = normalizeForMatching(caseItem.userType || '');
+    const normalizedCaseAccountStatus = normalizeForMatching(caseItem.accountStatus || '');
+    const normalizedCaseCategory = normalizeForMatching(caseItem.category || '');
+    const normalizedCaseSubCategory = normalizeForMatching(caseItem.subCategory || '');
+    const hasUserTypeHints = Boolean(normalizedUserTypeHint);
+    const userTypeAndServiceTypeMatched = !hasUserTypeHints
+      || isHintMatched(normalizedUserTypeHint, normalizedCaseUserType)
+      || isHintMatched(normalizedUserTypeHint, normalizedCaseAccountStatus);
+    if (!userTypeAndServiceTypeMatched) {
+      skippedByUserTypeOrServiceType.push({
+        caseDbId: String(caseItem._id || caseItem.id || ''),
+        caseId: String(caseItem.caseId || ''),
+        caseUserType: normalizedCaseUserType || null,
+        caseServiceType: normalizedCaseAccountStatus || null,
+        selectedUserTypeHint: normalizedUserTypeHint || null,
+        reason: 'Skipped: selected UserType does not match case UserType or Service Type',
+      });
+      return;
+    }
     let matchedCount = 0;
 
     // Get all keywords from case (mainKeywords, extraKeywords, synonyms)
@@ -299,34 +398,28 @@ function findBestMatchInCases(
       return; // Skip this case
     }
 
-    // Check main keywords (highest weight)
-    mainKeywords.forEach((keyword: string) => {
-      if (!keyword) return;
-      if (hasExactKeywordMatch(keyword)) {
-        matchedCount += 3; // Main keywords have highest weight
-      }
+    const matchedMainKeywords = mainKeywords.filter((keyword: string) => keyword && hasExactKeywordMatch(keyword));
+    const matchedExtraKeywords = extraKeywords.filter((keyword: string) => keyword && hasExactKeywordMatch(keyword));
+    const matchedSynonyms = synonyms.filter((synonym: string) => synonym && hasExactKeywordMatch(synonym));
+
+    matchedMainKeywords.forEach(() => {
+      matchedCount += 3; // Main keywords have highest weight
     });
 
-    // Check extra keywords (medium weight)
-    extraKeywords.forEach((keyword: string) => {
-      if (!keyword) return;
-      if (hasExactKeywordMatch(keyword)) {
-        matchedCount += 2;
-      }
+    matchedExtraKeywords.forEach(() => {
+      matchedCount += 2;
     });
 
-    // Check synonyms (lower weight)
-    synonyms.forEach((synonym: string) => {
-      if (!synonym) return;
-      if (hasExactKeywordMatch(synonym)) {
-        matchedCount += 1.5;
-      }
+    matchedSynonyms.forEach(() => {
+      matchedCount += 1.5;
     });
 
     // Also check if user description words appear in searchable text
+    const matchedUserWordsInCaseText: string[] = [];
     uniqueUserWords.forEach((word) => {
       if (word.length > 2 && searchableTextPadded.includes(` ${word} `)) {
         matchedCount += 0.5;
+        matchedUserWordsInCaseText.push(word);
       }
     });
 
@@ -347,7 +440,7 @@ function findBestMatchInCases(
       : (cases.length === 1 ? 100 : 0);
     const boundedUsageFrequencyScore = Math.min(100, usageFrequencyScore);
     const usageContribution = boundedUsageFrequencyScore * caseUsageWeightMultiplier;
-    const caseCreatedAtMs = new Date(caseItem?.createdAt || caseItem?.updatedAt || 0).getTime();
+    const caseCreatedAtMs = getCaseFreshnessTimestampMs(caseItem);
     const freshnessScore = Number.isFinite(caseCreatedAtMs) && caseCreatedAtMs > 0
       ? (
           maxCaseCreatedAtMs > minCaseCreatedAtMs
@@ -357,54 +450,52 @@ function findBestMatchInCases(
       : 0;
     const boundedFreshnessScore = Math.min(100, Math.max(0, freshnessScore));
     const freshnessContribution = boundedFreshnessScore * caseFreshnessWeightMultiplier;
-    const normalizedCaseUserType = normalizeForMatching(caseItem.userType || '');
-    const normalizedCaseAccountStatus = normalizeForMatching(caseItem.accountStatus || '');
-    const normalizedCaseCategory = normalizeForMatching(caseItem.category || '');
-    const normalizedCaseSubCategory = normalizeForMatching(caseItem.subCategory || '');
 
-    const isHintMatched = (hint: string, candidate: string): boolean => {
-      if (!hint || !candidate) return false;
-      return candidate === hint || candidate.includes(hint) || hint.includes(candidate);
-    };
-
-    const getKeywordCoverageScore = (candidate: string): number => {
+    const getKeywordCoverageDetails = (candidate: string): { score: number; matchedTokens: string[]; totalTokens: string[] } => {
       const tokens = candidate.split(' ').map((token) => token.trim()).filter(Boolean);
-      if (tokens.length === 0) return 0;
-      const matchedTokens = tokens.filter((token) => userWordSet.has(token)).length;
-      return (matchedTokens / tokens.length) * 100;
+      if (tokens.length === 0) return { score: 0, matchedTokens: [], totalTokens: [] };
+      const matchedTokens = tokens.filter((token) => userWordSet.has(token));
+      const score = (matchedTokens.length / tokens.length) * 100;
+      return { score, matchedTokens, totalTokens: tokens };
     };
 
-    const profileComponentScores: number[] = [];
+    const metadataComponentScores: number[] = [];
     let userTypeScore: number | null = null;
     let categoryScore: number | null = null;
     let subCategoryScore: number | null = null;
-    const hasUserTypeHints = Boolean(normalizedUserTypeHint);
+    let userTypeMatched: boolean | null = null;
+    let categoryMatchedTokens: string[] = [];
+    let categoryTotalTokens: string[] = [];
+    let subCategoryMatchedTokens: string[] = [];
+    let subCategoryTotalTokens: string[] = [];
     if (hasUserTypeHints) {
-      const userTypeMatched =
-        isHintMatched(normalizedUserTypeHint, normalizedCaseUserType) ||
-        isHintMatched(normalizedUserTypeHint, normalizedCaseAccountStatus);
-      userTypeScore = userTypeMatched ? 100 : 0;
-      profileComponentScores.push(userTypeScore);
+      userTypeMatched = userTypeAndServiceTypeMatched;
+      // UserType is a findings-only signal and does not contribute to caseMetadataMatch score.
+      userTypeScore = null;
     }
     if (normalizedCaseCategory) {
-      const categoryFromDescriptionScore = getKeywordCoverageScore(normalizedCaseCategory);
+      const categoryFromDescription = getKeywordCoverageDetails(normalizedCaseCategory);
+      categoryMatchedTokens = categoryFromDescription.matchedTokens;
+      categoryTotalTokens = categoryFromDescription.totalTokens;
       const categoryHintBoost = normalizedCategoryHint && isHintMatched(normalizedCategoryHint, normalizedCaseCategory)
         ? 100
         : 0;
-      categoryScore = Math.max(categoryFromDescriptionScore, categoryHintBoost);
-      profileComponentScores.push(categoryScore);
+      categoryScore = Math.max(categoryFromDescription.score, categoryHintBoost);
+      metadataComponentScores.push(categoryScore);
     }
     if (normalizedCaseSubCategory) {
-      const subCategoryFromDescriptionScore = getKeywordCoverageScore(normalizedCaseSubCategory);
+      const subCategoryFromDescription = getKeywordCoverageDetails(normalizedCaseSubCategory);
+      subCategoryMatchedTokens = subCategoryFromDescription.matchedTokens;
+      subCategoryTotalTokens = subCategoryFromDescription.totalTokens;
       const subCategoryHintBoost = normalizedSubCategoryHint && isHintMatched(normalizedSubCategoryHint, normalizedCaseSubCategory)
         ? 100
         : 0;
-      subCategoryScore = Math.max(subCategoryFromDescriptionScore, subCategoryHintBoost);
-      profileComponentScores.push(subCategoryScore);
+      subCategoryScore = Math.max(subCategoryFromDescription.score, subCategoryHintBoost);
+      metadataComponentScores.push(subCategoryScore);
     }
 
-    const caseMetadataMatchScore = profileComponentScores.length > 0
-      ? (profileComponentScores.reduce((sum, score) => sum + score, 0) / profileComponentScores.length)
+    const caseMetadataMatchScore = metadataComponentScores.length > 0
+      ? (metadataComponentScores.reduce((sum, score) => sum + score, 0) / metadataComponentScores.length)
       : 0;
     const boundedCaseMetadataMatchScore = Math.min(100, caseMetadataMatchScore);
     const metadataContribution = boundedCaseMetadataMatchScore * caseMetadataWeightMultiplier;
@@ -428,11 +519,20 @@ function findBestMatchInCases(
         debugBreakdown: includeDebugBreakdown ? {
           caseDbId,
           caseId: caseItem.caseId || '',
+          preFilter: {
+            skippedByUserTypeOrServiceType: [...skippedByUserTypeOrServiceType],
+          },
           keyword: {
             rawScore: rawPercentage,
             boundedScore: boundedRawPercentage,
             weight: keywordMatchWeight,
             contribution: keywordContribution,
+            findings: {
+              matchedMainKeywords,
+              matchedExtraKeywords,
+              matchedSynonyms,
+              matchedUserWordsInCaseText,
+            },
           },
           usageFrequency: {
             score: boundedUsageFrequencyScore,
@@ -443,7 +543,7 @@ function findBestMatchInCases(
             score: boundedFreshnessScore,
             weight: caseFreshnessWeight,
             contribution: freshnessContribution,
-            createdAt: caseItem?.createdAt || caseItem?.updatedAt || null,
+            createdAt: caseItem?.updatedAt || caseItem?.createdAt || null,
           },
           metadata: {
             overallScore: boundedCaseMetadataMatchScore,
@@ -452,12 +552,76 @@ function findBestMatchInCases(
             userTypeScore,
             categoryScore,
             subCategoryScore,
+            findings: {
+              userTypeHint: normalizedUserTypeHint || null,
+              caseUserType: normalizedCaseUserType || null,
+              caseAccountStatus: normalizedCaseAccountStatus || null,
+              userTypeMatched,
+              categoryMatchedTokens,
+              categoryTotalTokens,
+              subCategoryMatchedTokens,
+              subCategoryTotalTokens,
+            },
           },
           finalScore: matchPercentage,
         } : undefined,
       };
     }
   });
+  if (includeDebugBreakdown && !bestMatch.debugBreakdown) {
+    bestMatch.debugBreakdown = {
+      caseDbId: '',
+      caseId: 'No matched case',
+      preFilter: {
+        skippedByUserTypeOrServiceType: [...skippedByUserTypeOrServiceType],
+      },
+      keyword: {
+        rawScore: 0,
+        boundedScore: 0,
+        weight: keywordMatchWeight,
+        contribution: 0,
+        findings: {
+          matchedMainKeywords: [],
+          matchedExtraKeywords: [],
+          matchedSynonyms: [],
+          matchedUserWordsInCaseText: [],
+        },
+      },
+      usageFrequency: {
+        score: 0,
+        weight: caseUsageFrequencyWeight,
+        contribution: 0,
+      },
+      freshness: {
+        score: 0,
+        weight: caseFreshnessWeight,
+        contribution: 0,
+        createdAt: null,
+      },
+      metadata: {
+        overallScore: 0,
+        weight: caseMetadataMatchWeight,
+        contribution: 0,
+        userTypeScore: null,
+        categoryScore: null,
+        subCategoryScore: null,
+        findings: {
+          userTypeHint: normalizedUserTypeHint || null,
+          caseUserType: null,
+          caseAccountStatus: null,
+          userTypeMatched: null,
+          categoryMatchedTokens: [],
+          categoryTotalTokens: [],
+          subCategoryMatchedTokens: [],
+          subCategoryTotalTokens: [],
+        },
+      },
+      finalScore: 0,
+    };
+  }
+  if (includeDebugBreakdown && bestMatch.debugBreakdown) {
+    bestMatch.debugBreakdown.preFilter.skippedByUserTypeOrServiceType = [...skippedByUserTypeOrServiceType];
+  }
 
   return {
     problem: bestMatch.problem,

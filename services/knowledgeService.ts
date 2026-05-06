@@ -49,6 +49,8 @@ export interface KnowledgeSearchResult {
       weight: number;
       contribution: number;
       createdAt: string | null;
+      matchedAt: string | null;
+      matchCount: number;
     };
     metadata: {
       overallScore: number;
@@ -77,6 +79,7 @@ export interface MatchingWeightsOptions {
   caseUsageFrequencyWeight?: number; // 0-100
   caseFreshnessWeight?: number; // 0-100
   caseMetadataMatchWeight?: number; // 0-100
+  decayRateDays?: number;
   userTypeHint?: string;
   accountStatusHint?: string;
   categoryHint?: string;
@@ -91,11 +94,13 @@ export interface MatchingWeightsOptions {
 
 type CaseUsageStats = {
   usageByCaseDbId: Map<string, number>;
+  lastMatchedAtByCaseDbId: Map<string, number>;
   maxUsageCount: number;
 };
 
 const getEmptyCaseUsageStats = (): CaseUsageStats => ({
   usageByCaseDbId: new Map<string, number>(),
+  lastMatchedAtByCaseDbId: new Map<string, number>(),
   maxUsageCount: 0,
 });
 
@@ -121,6 +126,7 @@ const fetchCaseUsageStats = async (token: string | null): Promise<CaseUsageStats
     }
 
     const usageByCaseDbId = new Map<string, number>();
+    const lastMatchedAtByCaseDbId = new Map<string, number>();
     let maxUsageCount = 0;
 
     data.data.forEach((entry: any) => {
@@ -128,12 +134,15 @@ const fetchCaseUsageStats = async (token: string | null): Promise<CaseUsageStats
       const usageCount = Number(entry?.usageCount || 0);
       if (!caseDbId || !Number.isFinite(usageCount) || usageCount < 0) return;
       usageByCaseDbId.set(caseDbId, usageCount);
+      const lastMatchedAtMs = new Date(entry?.lastMatchedAt || 0).getTime();
+      if (Number.isFinite(lastMatchedAtMs) && lastMatchedAtMs > 0) {
+        lastMatchedAtByCaseDbId.set(caseDbId, lastMatchedAtMs);
+      }
       if (usageCount > maxUsageCount) {
         maxUsageCount = usageCount;
       }
     });
-
-    return { usageByCaseDbId, maxUsageCount };
+    return { usageByCaseDbId, lastMatchedAtByCaseDbId, maxUsageCount };
   } catch {
     return getEmptyCaseUsageStats();
   }
@@ -251,6 +260,7 @@ function findBestMatchInCases(
   const caseUsageFrequencyWeight = Math.max(0, Math.min(100, Number(weights?.caseUsageFrequencyWeight ?? 0)));
   const caseFreshnessWeight = Math.max(0, Math.min(100, Number(weights?.caseFreshnessWeight ?? 0)));
   const caseMetadataMatchWeight = Math.max(0, Math.min(100, Number(weights?.caseMetadataMatchWeight ?? 0)));
+  const decayRateDays = Math.max(1, Number(weights?.decayRateDays ?? 30));
   const keywordWeightMultiplier = keywordMatchWeight / 100; // 100 = full keyword influence (current only method)
   const caseUsageWeightMultiplier = caseUsageFrequencyWeight / 100;
   const caseFreshnessWeightMultiplier = caseFreshnessWeight / 100;
@@ -280,6 +290,7 @@ function findBestMatchInCases(
   let bestMatch = {
     problem: null as any,
     matchPercentage: 0,
+    rankingScore: Number.NEGATIVE_INFINITY,
     debugBreakdown: undefined as KnowledgeSearchResult['debugBreakdown'],
   };
   const getCaseFreshnessTimestampMs = (caseItem: any): number =>
@@ -298,6 +309,14 @@ function findBestMatchInCases(
     .filter((timestamp) => Number.isFinite(timestamp) && timestamp > 0);
   const minCaseCreatedAtMs = caseCreatedAtMsList.length > 0 ? Math.min(...caseCreatedAtMsList) : 0;
   const maxCaseCreatedAtMs = caseCreatedAtMsList.length > 0 ? Math.max(...caseCreatedAtMsList) : 0;
+  const eligibleCaseLastMatchedAtMsList = eligibleCasesForFreshness
+    .map((caseItem) => {
+      const caseDbId = String(caseItem._id || caseItem.id || '');
+      return caseUsageStats.lastMatchedAtByCaseDbId.get(caseDbId) || 0;
+    })
+    .filter((timestamp) => Number.isFinite(timestamp) && timestamp > 0);
+  const minCaseLastMatchedAtMs = eligibleCaseLastMatchedAtMsList.length > 0 ? Math.min(...eligibleCaseLastMatchedAtMsList) : 0;
+  const maxCaseLastMatchedAtMs = eligibleCaseLastMatchedAtMsList.length > 0 ? Math.max(...eligibleCaseLastMatchedAtMsList) : 0;
 
   cases.forEach((caseItem) => {
     const normalizedCaseUserType = normalizeForMatching(caseItem.userType || '');
@@ -441,13 +460,32 @@ function findBestMatchInCases(
     const boundedUsageFrequencyScore = Math.min(100, usageFrequencyScore);
     const usageContribution = boundedUsageFrequencyScore * caseUsageWeightMultiplier;
     const caseCreatedAtMs = getCaseFreshnessTimestampMs(caseItem);
-    const freshnessScore = Number.isFinite(caseCreatedAtMs) && caseCreatedAtMs > 0
+    const freshnessFromCaseDateScore = Number.isFinite(caseCreatedAtMs) && caseCreatedAtMs > 0
       ? (
           maxCaseCreatedAtMs > minCaseCreatedAtMs
             ? ((caseCreatedAtMs - minCaseCreatedAtMs) / (maxCaseCreatedAtMs - minCaseCreatedAtMs)) * 100
             : 100
         )
       : 0;
+    const caseLastMatchedAtMs = caseUsageStats.lastMatchedAtByCaseDbId.get(caseDbId) || 0;
+    const freshnessFromMatchedAtScore = Number.isFinite(caseLastMatchedAtMs) && caseLastMatchedAtMs > 0
+      ? (
+          maxCaseLastMatchedAtMs > minCaseLastMatchedAtMs
+            ? ((caseLastMatchedAtMs - minCaseLastMatchedAtMs) / (maxCaseLastMatchedAtMs - minCaseLastMatchedAtMs)) * 100
+            : 100
+        )
+      : 0;
+    const matchCountFreshnessScore = caseUsageStats.maxUsageCount > 0
+      ? (usageCount / caseUsageStats.maxUsageCount) * 100
+      : 0;
+    const freshnessComponents = [freshnessFromCaseDateScore];
+    if (eligibleCaseLastMatchedAtMsList.length > 0) {
+      freshnessComponents.push(freshnessFromMatchedAtScore);
+    }
+    if (caseUsageStats.maxUsageCount > 0) {
+      freshnessComponents.push(matchCountFreshnessScore);
+    }
+    const freshnessScore = freshnessComponents.reduce((sum, score) => sum + score, 0) / freshnessComponents.length;
     const boundedFreshnessScore = Math.min(100, Math.max(0, freshnessScore));
     const freshnessContribution = boundedFreshnessScore * caseFreshnessWeightMultiplier;
 
@@ -502,9 +540,22 @@ function findBestMatchInCases(
 
     const weightedPercentage = keywordContribution + usageContribution + freshnessContribution + metadataContribution;
     const matchPercentage = Math.min(100, Math.round(weightedPercentage));
+    const nowMs = Date.now();
+    const lastActivityAtMs = caseLastMatchedAtMs > 0 ? caseLastMatchedAtMs : caseCreatedAtMs;
+    const daysSinceLastActivity = lastActivityAtMs > 0
+      ? Math.max(0, nowMs - lastActivityAtMs) / (1000 * 60 * 60 * 24)
+      : 0;
+    const daysBeyondDecayThreshold = Math.max(0, daysSinceLastActivity - decayRateDays);
+    const stalePriorityPenalty = daysBeyondDecayThreshold > 0
+      ? Math.min(20, (daysBeyondDecayThreshold / decayRateDays) * 10)
+      : 0;
+    const rankingScore = matchPercentage - stalePriorityPenalty;
 
     // Update best match if this is better
-    if (matchPercentage > bestMatch.matchPercentage) {
+    if (
+      rankingScore > bestMatch.rankingScore
+      || (rankingScore === bestMatch.rankingScore && matchPercentage > bestMatch.matchPercentage)
+    ) {
       bestMatch = {
         problem: {
           id: caseItem._id || caseItem.id,
@@ -516,6 +567,7 @@ function findBestMatchInCases(
           confidence: caseItem.priority === 'High' ? 90 : caseItem.priority === 'Medium' ? 75 : 60,
         },
         matchPercentage,
+        rankingScore,
         debugBreakdown: includeDebugBreakdown ? {
           caseDbId,
           caseId: caseItem.caseId || '',
@@ -544,6 +596,8 @@ function findBestMatchInCases(
             weight: caseFreshnessWeight,
             contribution: freshnessContribution,
             createdAt: caseItem?.updatedAt || caseItem?.createdAt || null,
+            matchedAt: caseLastMatchedAtMs > 0 ? new Date(caseLastMatchedAtMs).toISOString() : null,
+            matchCount: usageCount,
           },
           metadata: {
             overallScore: boundedCaseMetadataMatchScore,
@@ -597,6 +651,8 @@ function findBestMatchInCases(
         weight: caseFreshnessWeight,
         contribution: 0,
         createdAt: null,
+        matchedAt: null,
+        matchCount: 0,
       },
       metadata: {
         overallScore: 0,

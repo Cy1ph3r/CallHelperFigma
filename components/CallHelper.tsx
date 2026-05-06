@@ -102,6 +102,7 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
     flowResult?: unknown;
     matchedCaseDbId?: string | null;
     matchedCaseCode?: string | null;
+    matchedAt?: string | null;
   }) => {
     try {
       const token = localStorage.getItem("token");
@@ -123,6 +124,7 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
           problemSummary,
           matchedCase: params.matchedCaseDbId || null,
           matchedCaseCode: params.matchedCaseCode || null,
+          matchedAt: params.matchedAt || null,
           flowResult: params.flowResult,
           generatedResponse: params.generatedResponse,
           status: params.status,
@@ -328,6 +330,7 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
       const caseUsageFrequencyWeight = getScoringWeightValue('caseUsageFrequency', 0);
       const caseFreshnessWeight = getScoringWeightValue('caseFreshness', 0);
       const caseMetadataMatchWeight = getScoringWeightValue('caseMetadataMatch', 0);
+      const decayRateDays = Math.max(1, Number(scoringSettings.decayRateDays || 30));
       const userTypeHint = entityType || '';
       const includeDebugBreakdown = Boolean(isAdmin);
       
@@ -336,6 +339,7 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
         caseUsageFrequencyWeight,
         caseFreshnessWeight,
         caseMetadataMatchWeight,
+        decayRateDays,
         userTypeHint,
         includeDebugBreakdown,
       });
@@ -360,6 +364,7 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
           status: "pending",
           matchedCaseDbId: searchResult.problem.id,
           matchedCaseCode: searchResult.problem.description,
+          matchedAt: new Date().toISOString(),
         });
         setDescriptionMatchPercentage(searchResult.matchPercentage);
         // Update confidence score to match percentage to prevent gray area warning

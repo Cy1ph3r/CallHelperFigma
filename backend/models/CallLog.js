@@ -34,6 +34,15 @@ const callLogSchema = new mongoose.Schema({
     trim: true,
     default: null
   },
+  matchedCaseCount: {
+    type: Number,
+    default: null,
+    min: 0
+  },
+  matchedAt: {
+    type: Date,
+    default: null
+  },
   flowResult: {
     completedSteps: [{
       stepId: String,
@@ -89,6 +98,7 @@ callLogSchema.index({ user: 1, createdAt: -1 });
 callLogSchema.index({ status: 1 });
 callLogSchema.index({ entityType: 1 });
 callLogSchema.index({ matchedCase: 1 });
+callLogSchema.index({ matchedAt: -1 });
 
 const CallLog = mongoose.model('CallLog', callLogSchema);
 

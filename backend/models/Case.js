@@ -67,6 +67,11 @@ const caseSchema = new mongoose.Schema({
     trim: true,
     default: ''
   },
+  matchCount: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
   priority: {
     type: String,
     enum: ['Low', 'Medium', 'High', 'Critical'],
@@ -116,6 +121,7 @@ const caseSchema = new mongoose.Schema({
 caseSchema.index({ caseId: 1 });
 caseSchema.index({ category: 1 });
 caseSchema.index({ userType: 1 });
+caseSchema.index({ matchCount: -1 });
 
 const Case = mongoose.model('Case', caseSchema);
 

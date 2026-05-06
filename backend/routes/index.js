@@ -196,6 +196,18 @@ router.post('/calls', authenticate, async (req, res) => {
       user: req.user._id
     });
     await callLog.save();
+    if (callLog.matchedCase) {
+      const updatedCase = await Case.findByIdAndUpdate(callLog.matchedCase, {
+        $inc: { matchCount: 1 }
+      }, {
+        new: true,
+        select: { matchCount: 1 }
+      });
+      if (updatedCase) {
+        callLog.matchedCaseCount = Number(updatedCase.matchCount || 0);
+        await callLog.save();
+      }
+    }
     res.status(201).json({ success: true, data: callLog });
   } catch (error) {
     if (error.name === 'ValidationError') {
@@ -551,7 +563,11 @@ router.get('/cases', authenticate, async (req, res) => {
 
 router.get('/cases/usage-counts', authenticate, async (req, res) => {
   try {
-    const usageCounts = await CallLog.aggregate([
+    const matchedCases = await Case.find(
+      { matchCount: { $gt: 0 } },
+      { caseId: 1, matchCount: 1 }
+    );
+    const latestMatches = await CallLog.aggregate([
       {
         $match: {
           matchedCase: { $ne: null }
@@ -560,25 +576,22 @@ router.get('/cases/usage-counts', authenticate, async (req, res) => {
       {
         $group: {
           _id: '$matchedCase',
-          usageCount: { $sum: 1 }
+          lastMatchedAt: {
+            $max: {
+              $ifNull: ['$matchedAt', '$createdAt']
+            }
+          }
         }
       }
     ]);
-
-    const caseIds = usageCounts.map((entry) => entry._id);
-    const matchedCases = await Case.find(
-      { _id: { $in: caseIds } },
-      { caseId: 1 }
+    const lastMatchedAtByCaseDbId = new Map(
+      latestMatches.map((entry) => [entry._id.toString(), entry.lastMatchedAt || null])
     );
-
-    const caseCodeById = new Map(
-      matchedCases.map((caseItem) => [caseItem._id.toString(), caseItem.caseId])
-    );
-
-    const data = usageCounts.map((entry) => ({
-      caseDbId: entry._id.toString(),
-      caseId: caseCodeById.get(entry._id.toString()) || null,
-      usageCount: entry.usageCount
+    const data = matchedCases.map((caseItem) => ({
+      caseDbId: caseItem._id.toString(),
+      caseId: caseItem.caseId || null,
+      usageCount: Number(caseItem.matchCount || 0),
+      lastMatchedAt: lastMatchedAtByCaseDbId.get(caseItem._id.toString()) || null
     }));
 
     res.json({ success: true, data });

@@ -38,7 +38,7 @@ export interface FlowPath {
     step: Step;
     subCondition: SubCondition;
   }>;
-  finalAction: 'continue' | 'force_solution' | 'escalation';
+  finalAction: 'continue' | 'force_solution' | 'direct_answer' | 'escalation';
   finalStepDescription?: string;
 }
 
@@ -204,8 +204,12 @@ export function GrayAreaWizard({ isOpen, onClose, onComplete, isDarkMode }: Gray
       
       setCurrentStep(nextStep);
       setWizardHistory([...wizardHistory, nextStep]);
-    } else if (subCondition.action === 'force_solution' || subCondition.action === 'escalation') {
-      console.log('✅ Ending flow (force_solution or escalation)');
+    } else if (
+      subCondition.action === 'force_solution'
+      || subCondition.action === 'direct_answer'
+      || subCondition.action === 'escalation'
+    ) {
+      console.log('✅ Ending flow (force_solution or direct_answer or escalation)');
       // End of flow - complete wizard
       if (selectedQuestion) {
         onComplete({
@@ -424,6 +428,11 @@ export function GrayAreaWizard({ isOpen, onClose, onComplete, isDarkMode }: Gray
                               حل مباشر
                             </Badge>
                           )}
+                          {subCondition.action === 'direct_answer' && (
+                            <Badge className="bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-0 text-[10px]">
+                              إجابة مباشرة
+                            </Badge>
+                          )}
                           {subCondition.action === 'escalation' && (
                             <Badge className="bg-orange-500/10 text-orange-600 dark:text-orange-400 border-0 text-[10px]">
                               تصعيد
@@ -529,6 +538,11 @@ export function GrayAreaWizard({ isOpen, onClose, onComplete, isDarkMode }: Gray
                           {childSubCondition.action === 'force_solution' && (
                             <Badge className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-0 text-[10px]">
                               حل مباشر
+                            </Badge>
+                          )}
+                          {childSubCondition.action === 'direct_answer' && (
+                            <Badge className="bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-0 text-[10px]">
+                              إجابة مباشرة
                             </Badge>
                           )}
                           {childSubCondition.action === 'escalation' && (

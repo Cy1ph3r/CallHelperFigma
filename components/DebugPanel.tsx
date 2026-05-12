@@ -29,7 +29,7 @@ interface DebugPanelProps {
     order: number;
   } | null;
   subCondition: string | null;
-  action: 'continue' | 'force_solution' | 'escalation' | null;
+  action: 'continue' | 'force_solution' | 'direct_answer' | 'escalation' | null;
   finalScore: number;
   flowLog: Array<{
     step: string;
@@ -175,9 +175,11 @@ export function DebugPanel({
                   ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400'
                   : action === 'force_solution'
                   ? 'bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-400'
+                  : action === 'direct_answer'
+                  ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-950 dark:text-cyan-400'
                   : 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400'
               }`}>
-                {action === 'continue' ? 'Continue' : action === 'force_solution' ? 'Force Solution' : 'Escalation'}
+                {action === 'continue' ? 'Continue' : action === 'force_solution' ? 'Force Solution' : action === 'direct_answer' ? 'Direct Answer' : 'Escalation'}
               </Badge>
             ) : (
               <span className="text-xs text-muted-foreground">لا يوجد</span>
@@ -289,7 +291,7 @@ export function DebugPanel({
                       <span className="text-primary">{log.subCondition}</span>
                     </div>
                     <div className="text-[10px] text-muted-foreground mt-0.5">
-                      {log.action === 'continue' ? '✓' : log.action === 'force_solution' ? '🛑' : '⚠️'} {log.action}
+                      {log.action === 'continue' ? '✓' : log.action === 'force_solution' ? '🛑' : log.action === 'direct_answer' ? '💡' : '⚠️'} {log.action}
                     </div>
                   </div>
                 ))}

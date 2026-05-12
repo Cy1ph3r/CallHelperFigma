@@ -76,7 +76,7 @@ export interface Route {
 export interface SubCondition {
   id: string;
   name: string;
-  action: 'continue' | 'force_solution' | 'escalation';
+  action: 'continue' | 'force_solution' | 'direct_answer' | 'escalation';
   actionDetails?: string; // Details for force_solution or escalation
   childConditions?: SubCondition[]; // NEW: Nested conditions for 'continue' action
   linkedRouteIds?: string[]; // NEW: IDs of routes where this SubCondition is linked (for multi-route SubConditions)

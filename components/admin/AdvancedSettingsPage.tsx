@@ -510,6 +510,11 @@ export function AdvancedSettingsPage() {
         color: 'bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-400',
         icon: StopCircle,
       },
+      direct_answer: {
+        label: 'إجابة مباشرة',
+        color: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-950 dark:text-cyan-400',
+        icon: Check,
+      },
       escalation: {
         label: 'تصعيد',
         color: 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400',

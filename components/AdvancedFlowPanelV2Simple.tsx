@@ -43,7 +43,7 @@ interface AdvancedFlowPanelV2Props {
       stepName: string;
       selectedSubCondition: SubCondition;
     }>;
-    finalAction: 'continue' | 'force_solution' | 'escalation';
+    finalAction: 'continue' | 'force_solution' | 'direct_answer' | 'escalation';
     escalationDetails?: string;
     solutionDetails?: string;
   }) => void;
@@ -51,7 +51,7 @@ interface AdvancedFlowPanelV2Props {
     activeRoute: string;
     currentStep: { name: string; order: number };
     subCondition: string;
-    action: 'continue' | 'force_solution' | 'escalation';
+    action: 'continue' | 'force_solution' | 'direct_answer' | 'escalation';
   }) => void;
 }
 
@@ -91,7 +91,7 @@ export function AdvancedFlowPanelV2({
   
   const [selectedConditionId, setSelectedConditionId] = useState<string | null>(null);
   const [flowFinished, setFlowFinished] = useState(false);
-  const [finalAction, setFinalAction] = useState<'continue' | 'force_solution' | 'escalation' | null>(null);
+  const [finalAction, setFinalAction] = useState<'continue' | 'force_solution' | 'direct_answer' | 'escalation' | null>(null);
 
   // ====================================================================
   // Initialize Available Routes
@@ -271,14 +271,14 @@ export function AdvancedFlowPanelV2({
         finishFlow(newFlowPath, 'continue');
       }
     } else {
-      // force_solution or escalation
+      // force_solution or direct_answer or escalation
       finishFlow(newFlowPath, selectedCondition.action);
     }
   };
 
   const finishFlow = (
     path: Array<{ route: Route; step: Step; subCondition: SubCondition }>,
-    action: 'continue' | 'force_solution' | 'escalation'
+    action: 'continue' | 'force_solution' | 'direct_answer' | 'escalation'
   ) => {
     setFlowFinished(true);
     setFinalAction(action);
@@ -295,7 +295,9 @@ export function AdvancedFlowPanelV2({
       completedSteps,
       finalAction: action,
       escalationDetails: action === 'escalation' ? lastStep.subCondition.actionDetails : undefined,
-      solutionDetails: action === 'force_solution' ? lastStep.subCondition.actionDetails : undefined,
+      solutionDetails: action === 'force_solution' || action === 'direct_answer'
+        ? lastStep.subCondition.actionDetails
+        : undefined,
     });
 
     console.log('🏁 Flow finished:', { action, completedSteps: completedSteps.length });
@@ -506,6 +508,11 @@ export function AdvancedFlowPanelV2({
                                 حل مباشر
                               </Badge>
                             )}
+                            {subCond.action === 'direct_answer' && (
+                              <Badge className="bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-0 text-[10px]">
+                                إجابة مباشرة
+                              </Badge>
+                            )}
                             {subCond.action === 'escalation' && (
                               <Badge className="bg-orange-500/10 text-orange-600 dark:text-orange-400 border-0 text-[10px]">
                                 تصعيد
@@ -536,7 +543,7 @@ export function AdvancedFlowPanelV2({
                             <p className="text-xs font-semibold text-foreground mb-1">
                               {subCond.action === 'escalation' 
                                 ? '⚠️ ملاحظات قبل التصعيد:' 
-                                : subCond.action === 'force_solution'
+                                : subCond.action === 'force_solution' || subCond.action === 'direct_answer'
                                 ? '💡 توجيهات الحل:'
                                 : 'تفاصيل:'}
                             </p>
@@ -560,9 +567,11 @@ export function AdvancedFlowPanelV2({
               }}
               className="w-full bg-gradient-to-r from-orange-500 to-red-500 text-white hover:from-orange-600 hover:to-red-600 font-bold"
             >
-              {currentConditions.find(sc => sc.id === selectedConditionId)?.action === 'force_solution' 
-                ? '✓ تطبيق الحل' 
-                : '✓ تطبيق التصعيد'}
+              {currentConditions.find(sc => sc.id === selectedConditionId)?.action === 'force_solution'
+                ? '✓ تطبيق الحل'
+                : currentConditions.find(sc => sc.id === selectedConditionId)?.action === 'direct_answer'
+                  ? '✓ تطبيق إجابة مباشرة'
+                  : '✓ تطبيق التصعيد'}
             </Button>
           )}
         </div>
@@ -575,6 +584,8 @@ export function AdvancedFlowPanelV2({
             ? 'border-emerald-500/50 bg-emerald-50/30 dark:bg-emerald-950/20'
             : finalAction === 'force_solution'
             ? 'border-orange-500/50 bg-orange-50/30 dark:bg-orange-950/20'
+            : finalAction === 'direct_answer'
+            ? 'border-cyan-500/50 bg-cyan-50/30 dark:bg-cyan-950/20'
             : 'border-red-500/50 bg-red-50/30 dark:bg-red-950/20'
         }`}>
           <div className="flex items-center gap-3 mb-4">
@@ -582,6 +593,8 @@ export function AdvancedFlowPanelV2({
               <CheckCircle2 className="size-8 text-emerald-600 dark:text-emerald-400" />
             ) : finalAction === 'force_solution' ? (
               <StopCircle className="size-8 text-orange-600 dark:text-orange-400" />
+            ) : finalAction === 'direct_answer' ? (
+              <CheckCircle2 className="size-8 text-cyan-600 dark:text-cyan-400" />
             ) : (
               <AlertCircle className="size-8 text-red-600 dark:text-red-400" />
             )}
@@ -591,6 +604,8 @@ export function AdvancedFlowPanelV2({
                   ? 'تمت جميع الخطوات بنجاح'
                   : finalAction === 'force_solution'
                   ? 'تم إيقاف العملية - يوجد حل'
+                  : finalAction === 'direct_answer'
+                  ? 'تم تطبيق إجابة مباشرة'
                   : 'تم التصعيد للجهة المختصة'
                 }
               </h4>

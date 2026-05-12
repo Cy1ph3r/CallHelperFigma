@@ -61,7 +61,8 @@ import {
 import { 
   searchWithFallback, 
   getFormattedResponse,
-  type KnowledgeSearchResult 
+  type KnowledgeSearchResult,
+  type MatchingWeightsOptions,
 } from "../services/knowledgeService";
 
 // ============ NEW: Import Advanced Settings Context ============
@@ -241,7 +242,7 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
   /**
    * Action taken
    */
-  const [debugAction, setDebugAction] = useState<'continue' | 'force_solution' | 'escalation' | null>(null);
+  const [debugAction, setDebugAction] = useState<'continue' | 'force_solution' | 'direct_answer' | 'escalation' | null>(null);
 
   /**
    * Flow log for debugging
@@ -262,6 +263,61 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
     const parsedValue = Number(matchedWeight?.value);
     if (!Number.isFinite(parsedValue)) return fallback;
     return Math.max(0, Math.min(100, parsedValue));
+  };
+  const buildMatcherOptions = (
+    extraOptions: Partial<MatchingWeightsOptions> = {}
+  ): MatchingWeightsOptions => {
+    const keywordMatchWeight = getScoringWeightValue('keywordMatch', 100);
+    const caseUsageFrequencyWeight = getScoringWeightValue('caseUsageFrequency', 0);
+    const caseFreshnessWeight = getScoringWeightValue('caseFreshness', 0);
+    const caseMetadataMatchWeight = getScoringWeightValue('caseMetadataMatch', 0);
+    const decayRateDays = Math.max(1, Number(scoringSettings.decayRateDays || 30));
+    const userTypeHint = entityType || '';
+    const includeDebugBreakdown = Boolean(isAdmin);
+
+    return {
+      keywordMatchWeight,
+      caseUsageFrequencyWeight,
+      caseFreshnessWeight,
+      caseMetadataMatchWeight,
+      decayRateDays,
+      userTypeHint,
+      includeDebugBreakdown,
+      ...extraOptions,
+    };
+  };
+  const rerunMatchWithFlowContext = async (context: {
+    routeNames?: string[];
+    stepNames?: string[];
+    subConditionNames?: string[];
+    problemTypeName?: string;
+  }): Promise<KnowledgeSearchResult | null> => {
+    const routeNames = (context.routeNames || []).map((value) => value.trim()).filter(Boolean);
+    const stepNames = (context.stepNames || []).map((value) => value.trim()).filter(Boolean);
+    const subConditionNames = (context.subConditionNames || []).map((value) => value.trim()).filter(Boolean);
+    const problemTypeName = (context.problemTypeName || '').trim();
+    const contextTokens = [
+      ...new Set([
+        ...subConditionNames,
+        ...stepNames,
+        ...routeNames,
+        problemTypeName,
+      ].filter(Boolean)),
+    ];
+    const enhancedProblemDescription = [problemSummary, ...contextTokens]
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .join(' ');
+    if (!enhancedProblemDescription) return null;
+
+    const categoryHint = [...new Set([...routeNames, problemTypeName].filter(Boolean))].join(' ');
+    const subCategoryHint = [...new Set([...stepNames, ...subConditionNames].filter(Boolean))].join(' ');
+    const rematchResult = await searchWithFallback(enhancedProblemDescription, false, buildMatcherOptions({
+      categoryHint: categoryHint || undefined,
+      subCategoryHint: subCategoryHint || undefined,
+    }));
+    setDebugScoringBreakdown(rematchResult.debugBreakdown || null);
+    return rematchResult;
   };
 
   /**
@@ -326,25 +382,10 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
     try {
       // ============ NEW: Search real database only (no mock fallback) ============
       console.log('🔍 Searching knowledge base for:', problemSummary);
-      const keywordMatchWeight = getScoringWeightValue('keywordMatch', 100);
-      const caseUsageFrequencyWeight = getScoringWeightValue('caseUsageFrequency', 0);
-      const caseFreshnessWeight = getScoringWeightValue('caseFreshness', 0);
-      const caseMetadataMatchWeight = getScoringWeightValue('caseMetadataMatch', 0);
-      const decayRateDays = Math.max(1, Number(scoringSettings.decayRateDays || 30));
-      const userTypeHint = entityType || '';
-      const includeDebugBreakdown = Boolean(isAdmin);
-      
-      const searchResult = await searchWithFallback(problemSummary, false, {
-        keywordMatchWeight,
-        caseUsageFrequencyWeight,
-        caseFreshnessWeight,
-        caseMetadataMatchWeight,
-        decayRateDays,
-        userTypeHint,
-        includeDebugBreakdown,
-      });
+      const matcherOptions = buildMatcherOptions();
+      const searchResult = await searchWithFallback(problemSummary, false, matcherOptions);
       setDebugScoringBreakdown(searchResult.debugBreakdown || null);
-      if (includeDebugBreakdown && searchResult.debugBreakdown) {
+      if (matcherOptions.includeDebugBreakdown && searchResult.debugBreakdown) {
         console.log('🧪 Matcher debug breakdown:', searchResult.debugBreakdown);
       }
 
@@ -528,6 +569,15 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
    */
   const isDirectAnswerRoute = !wasGrayAreaResolved && displayedScore >= directAnswerThreshold;
   const showAllButtons = wasGrayAreaResolved || (displayedScore >= showAdvancedThreshold && displayedScore < directAnswerThreshold);
+  const liveRoutingMode = !generatedText
+    ? null
+    : isLowConfidence
+      ? 'gray_area'
+      : isDirectAnswerRoute
+        ? 'direct_answer'
+        : showAllButtons
+          ? 'advanced_mode'
+          : 'unknown';
 
   /**
    * Handle Advanced Mode toggle
@@ -838,6 +888,25 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
                 )}
               </div>
             )}
+            {isAdmin && generatedText && (
+              <div className="glass-panel rounded-xl p-3 border border-primary/30 bg-primary/5">
+                <div className="flex items-center justify-between gap-2 text-right">
+                  <span className="text-xs font-semibold text-foreground">Live Threshold Indicator</span>
+                  <Badge className="bg-primary/15 text-primary border-0 text-[10px]">
+                    {liveRoutingMode === 'gray_area'
+                      ? 'Gray Area'
+                      : liveRoutingMode === 'advanced_mode'
+                        ? 'Advanced'
+                        : liveRoutingMode === 'direct_answer'
+                          ? 'Direct'
+                          : 'Unknown'}
+                  </Badge>
+                </div>
+                <p className="text-[11px] text-muted-foreground text-right mt-1">
+                  Score: {displayedScore}% | Direct: ≥{directAnswerThreshold}% | Advanced: {showAdvancedThreshold}%–{directAnswerThreshold - 1}% | Gray: &lt;{grayAreaThreshold}%
+                </p>
+              </div>
+            )}
 
             {/* Generated Text with Blur Effect for Low Confidence */}
             <div className={`relative ${isLowConfidence ? 'pointer-events-none' : ''}`}>
@@ -1036,6 +1105,96 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
                         const problemTypeName = selectedProblemType 
                           ? (PROBLEM_TYPES.find(t => t.id === selectedProblemType)?.name || '')
                           : '';
+                        const routeNames = result.completedSteps
+                          .map((completedStep) => {
+                            const matchedStep = steps.find((stepItem) => stepItem.id === completedStep.stepId);
+                            const matchedRoute = routes.find((routeItem) => routeItem.id === matchedStep?.routeId);
+                            return matchedRoute?.name || '';
+                          })
+                          .filter(Boolean);
+                        const stepNames = result.completedSteps.map((completedStep) => completedStep.stepName).filter(Boolean);
+                        const subConditionNames = result.completedSteps
+                          .map((completedStep) => completedStep.selectedSubCondition?.name || '')
+                          .filter(Boolean);
+                        if (result.finalAction === 'direct_answer') {
+                          const directAnswerText = lastSubCondition.actionDetails || lastSubCondition.name || 'تم تقديم الإجابة المباشرة';
+                          const newGeneratedText = `السلام عليكم ورحمة الله وبركاته،\n\nتم استقبال بلاغ من العميل: ${customerName}\nنوع الجهة: ${entityTypeArabic}\nنوع المشكلة: ${problemTypeName}\n\nالحالة: ${lastSubCondition.name}\n\n💡 توجيهات الحل:\n${directAnswerText}\n\nشكراً لتواصلكم معنا.`;
+                          setGeneratedText(newGeneratedText);
+                          setIsMatchedResponse(false);
+                          setMatchedProblem(null);
+                          setDescriptionMatchPercentage(0);
+                          void logCallToBackend({
+                            generatedResponse: newGeneratedText,
+                            status: 'resolved',
+                            flowResult: result,
+                          });
+                          result.completedSteps.forEach((step) => {
+                            setDebugFlowLog(prev => [
+                              ...prev,
+                              {
+                                step: step.stepName,
+                                subCondition: step.selectedSubCondition.name,
+                                action: step.selectedSubCondition.action,
+                                timestamp: new Date(),
+                              },
+                            ]);
+                          });
+                          return;
+                        }
+                        const enhancedSearchResult = await rerunMatchWithFlowContext({
+                          routeNames,
+                          stepNames,
+                          subConditionNames,
+                          problemTypeName,
+                        });
+                        if (
+                          result.finalAction !== 'escalation'
+                          && result.finalAction !== 'direct_answer'
+                          && enhancedSearchResult?.isMatched
+                          && enhancedSearchResult.problem
+                        ) {
+                          const matchedText = getFormattedResponse(
+                            enhancedSearchResult.problem,
+                            customerName,
+                            entityType
+                          );
+                          setGeneratedText(matchedText);
+                          setDescriptionMatchPercentage(enhancedSearchResult.matchPercentage);
+                          setConfidenceScore(100);
+                          setMatchedProblem({
+                            id: enhancedSearchResult.problem.id,
+                            title: enhancedSearchResult.problem.title,
+                            description: enhancedSearchResult.problem.description,
+                            response: enhancedSearchResult.problem.solution,
+                            keywords: enhancedSearchResult.problem.keywords,
+                            category: enhancedSearchResult.problem.category,
+                            confidence: enhancedSearchResult.problem.confidence,
+                          } as RegisteredProblem);
+                          setIsMatchedResponse(true);
+                          void logCallToBackend({
+                            generatedResponse: matchedText,
+                            status: result.finalAction === 'force_solution' ? 'resolved' : 'pending',
+                            matchedCaseDbId: enhancedSearchResult.problem.id,
+                            matchedCaseCode: enhancedSearchResult.problem.description,
+                            matchedAt: new Date().toISOString(),
+                            flowResult: result,
+                          });
+                          result.completedSteps.forEach((step) => {
+                            setDebugFlowLog(prev => [
+                              ...prev,
+                              {
+                                step: step.stepName,
+                                subCondition: step.selectedSubCondition.name,
+                                action: step.selectedSubCondition.action,
+                                timestamp: new Date(),
+                              },
+                            ]);
+                          });
+                          return;
+                        }
+                        setIsMatchedResponse(false);
+                        setMatchedProblem(null);
+                        setDescriptionMatchPercentage(0);
                         
                         if (result.finalAction === 'escalation') {
                           const escalationText = lastSubCondition.actionDetails || 'يرجى تصعيد المشكلة للقسم المختص';
@@ -1125,6 +1284,90 @@ export function CallHelper({ isDarkMode }: { isDarkMode: boolean }) {
           // Generate response based on flow path
           const entityTypeArabic = entityType;
           const problemTypeName = flowPath.questionTitle;
+          const routeNames = flowPath.selectedSteps.map((item) => item.route.name).filter(Boolean);
+          const stepNames = flowPath.selectedSteps.map((item) => item.step.name).filter(Boolean);
+          const subConditionNames = flowPath.selectedSteps.map((item) => item.subCondition.name).filter(Boolean);
+          if (flowPath.finalAction === 'direct_answer') {
+            const directAnswerText = flowPath.finalStepDescription || 'تم تقديم الإجابة المباشرة';
+            const generatedResponse = `السلام عليكم ورحمة الله وبركاته،\n\nعزيزي/عزيزتي ${customerName}،\n\nتم استلام بلاغكم بخصوص: ${problemTypeName}\nنوع الجهة: ${entityTypeArabic}\n\n💡 توجيهات الحل:\n${directAnswerText}\n\nتفاصيل المشكلة:\n${problemSummary}\n\nتمت المعالجة بنجاح.\n\nمع تحياتنا،`;
+            setGeneratedText(generatedResponse);
+            setIsMatchedResponse(false);
+            setMatchedProblem(null);
+            setDescriptionMatchPercentage(0);
+            void logCallToBackend({
+              generatedResponse,
+              status: 'resolved',
+              flowResult: flowPath,
+            });
+            setIsGenerating(false);
+            flowPath.selectedSteps.forEach((item) => {
+              setDebugFlowLog(prev => [
+                ...prev,
+                {
+                  step: item.step.name,
+                  subCondition: item.subCondition.name,
+                  action: item.subCondition.action,
+                  timestamp: new Date(),
+                },
+              ]);
+            });
+            return;
+          }
+          const enhancedSearchResult = await rerunMatchWithFlowContext({
+            routeNames,
+            stepNames,
+            subConditionNames,
+            problemTypeName,
+          });
+          if (
+            flowPath.finalAction !== 'escalation'
+            && flowPath.finalAction !== 'direct_answer'
+            && enhancedSearchResult?.isMatched
+            && enhancedSearchResult.problem
+          ) {
+            const matchedText = getFormattedResponse(
+              enhancedSearchResult.problem,
+              customerName,
+              entityType
+            );
+            setGeneratedText(matchedText);
+            setDescriptionMatchPercentage(enhancedSearchResult.matchPercentage);
+            setConfidenceScore(100);
+            setMatchedProblem({
+              id: enhancedSearchResult.problem.id,
+              title: enhancedSearchResult.problem.title,
+              description: enhancedSearchResult.problem.description,
+              response: enhancedSearchResult.problem.solution,
+              keywords: enhancedSearchResult.problem.keywords,
+              category: enhancedSearchResult.problem.category,
+              confidence: enhancedSearchResult.problem.confidence,
+            } as RegisteredProblem);
+            setIsMatchedResponse(true);
+            void logCallToBackend({
+              generatedResponse: matchedText,
+              status: flowPath.finalAction === 'force_solution' ? 'resolved' : 'pending',
+              matchedCaseDbId: enhancedSearchResult.problem.id,
+              matchedCaseCode: enhancedSearchResult.problem.description,
+              matchedAt: new Date().toISOString(),
+              flowResult: flowPath,
+            });
+            setIsGenerating(false);
+            flowPath.selectedSteps.forEach((item) => {
+              setDebugFlowLog(prev => [
+                ...prev,
+                {
+                  step: item.step.name,
+                  subCondition: item.subCondition.name,
+                  action: item.subCondition.action,
+                  timestamp: new Date(),
+                },
+              ]);
+            });
+            return;
+          }
+          setIsMatchedResponse(false);
+          setMatchedProblem(null);
+          setDescriptionMatchPercentage(0);
           
           // Build flow path description
           const flowPathText = flowPath.selectedSteps

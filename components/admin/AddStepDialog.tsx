@@ -24,8 +24,8 @@ import { Plus, Check, X, Link2, PlayCircle, StopCircle, AlertCircle } from 'luci
 interface AddStepDialogProps {
   open: boolean;
   onClose: () => void;
-  onAdd: (data: { name: string; action: 'continue' | 'force_solution' | 'escalation'; actionDetails?: string; parentId?: string; selectedRoutes: string[] }) => void;
-  onUpdate?: (data: { name: string; action: 'continue' | 'force_solution' | 'escalation'; actionDetails?: string; applyToLinked: boolean }) => void;
+  onAdd: (data: { name: string; action: 'continue' | 'force_solution' | 'direct_answer' | 'escalation'; actionDetails?: string; parentId?: string; selectedRoutes: string[] }) => void;
+  onUpdate?: (data: { name: string; action: 'continue' | 'force_solution' | 'direct_answer' | 'escalation'; actionDetails?: string; applyToLinked: boolean }) => void;
   routes: Route[];
   steps: Step[];
   selectedStepId: string;
@@ -365,6 +365,12 @@ export function AddStepDialog({
                     إيقاف وحل - عرض الحل وإيقاف Flow
                   </div>
                 </SelectItem>
+                <SelectItem value="direct_answer" className="text-right">
+                  <div className="flex items-center gap-2">
+                    <Check className="size-4 text-cyan-500" />
+                    إجابة مباشرة - استخدام توجيهات الحل مباشرة
+                  </div>
+                </SelectItem>
                 <SelectItem value="escalation" className="text-right">
                   <div className="flex items-center gap-2">
                     <AlertCircle className="size-4 text-red-500" />
@@ -379,12 +385,14 @@ export function AddStepDialog({
           {action !== 'continue' && (
             <div className="space-y-2">
               <Label htmlFor="sub-details">
-                {action === 'force_solution' ? '💡 توجيهات الحل (اختياري)' : '⚠️ ملاحظات التصعيد (اختياري)'}
+                {action === 'force_solution' || action === 'direct_answer'
+                  ? '💡 توجيهات الحل (اختياري)'
+                  : '⚠️ ملاحظات التصعيد (اختياري)'}
               </Label>
               <Input
                 id="sub-details"
                 placeholder={
-                  action === 'force_solution'
+                  action === 'force_solution' || action === 'direct_answer'
                     ? 'مثال: التأكد من إكمال التسجيل أولاً'
                     : 'مثال: يحتاج رقم التأشيرة والمجموعة قبل التصعيد'
                 }
